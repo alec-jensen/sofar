@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.exe
+*.log
+test-results/
+.cache/
+*.tsbuildinfo

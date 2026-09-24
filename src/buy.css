@@ -1,0 +1,149 @@
+.buy-prompt {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 76px;
+  padding: 15px 19px;
+  border: 1px solid #d7e4d4;
+  border-radius: 17px;
+  background: #edf4e9;
+  text-align: left;
+  color: #294d38;
+}
+.calc-layout { display: grid; gap: 17px; min-width: 0; }
+.calc-buy-link { display: flex; align-items: center; gap: 13px; width: 100%; min-height: 72px; padding: 13px 18px; border: 1px solid #dbe8d9; border-radius: 15px; background: #eef5eb; color: #315e47; text-align: left; }
+.calc-buy-link:hover { background: #e5f0e2; }
+.calc-buy-icon { display: grid; flex: none; place-items: center; width: 39px; height: 39px; border-radius: 11px; background: #dcebd6; }
+.calc-buy-link > span:nth-child(2) { display: grid; gap: 3px; flex: 1; }
+.calc-buy-link strong { font-size: 13px; }
+.calc-buy-link small { color: #4d654f; font-size: 11px; line-height: 1.4; }
+.calc-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.calc-tabs button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 46px; padding: 8px 10px; border: 1px solid #dfe7dd; border-radius: 11px; background: #fff; color: #55705c; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.calc-tabs button.active { border-color: #315e47; background: #315e47; color: #fff; }
+.calc-panel { padding: 29px; }
+.calc-eyebrow { color: #55745e; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+.calc-panel-head h2 { margin: 7px 0 0; font-family: var(--serif); font-size: 23px; }
+.calc-panel-head p { margin: 8px 0 0; color: #5c6d5d; line-height: 1.5; }
+.calc-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 21px; max-width: 690px; margin-top: 29px; }
+.calc-field { display: grid; align-content: start; gap: 7px; min-width: 0; color: #3c5643; font-size: 12px; font-weight: 650; }
+.calc-input-wrap { display: flex; align-items: center; position: relative; }
+.calc-input-wrap > span:first-child { position: absolute; left: 14px; color: #53715a; font-size: 16px; }
+.calc-input-wrap input { width: 100%; min-height: 49px; padding-left: 29px; border-radius: 10px; font-size: 16px; }
+.calc-number-wrap input { padding-left: 13px; padding-right: 55px; }
+.calc-number-wrap > span:last-child { position: absolute; right: 14px; color: #6b796c; font-size: 12px; font-weight: 500; }
+.calc-field small { color: #536555; font-size: 11px; font-weight: 400; line-height: 1.4; }
+.calc-result { display: grid; gap: 5px; margin-top: 31px; padding: 23px; border-radius: 14px; background: #f0f6ed; }
+.calc-result span { color: #59725f; font-size: 12px; }
+.calc-result strong { color: #315e47; font-family: var(--serif); font-size: clamp(23px, 3vw, 34px); letter-spacing: -.035em; line-height: 1.25; }
+.calc-result small { color: #607363; font-size: 12px; line-height: 1.5; }
+.calc-note { display: flex; align-items: flex-start; gap: 6px; margin: 20px 0 0; color: #6b796c; font-size: 11px; line-height: 1.5; }
+.calc-note svg { flex: none; margin-top: 1px; }
+.buy-prompt:hover { background: #e5f0e1; }
+.buy-prompt-icon, .buy-goal-icon, .buy-invest-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: #dcebd6;
+  color: #315e47;
+}
+.buy-prompt > span:nth-child(2) { display: grid; gap: 3px; flex: 1; }
+.buy-prompt strong { font-size: 14px; font-weight: 700; }
+.buy-prompt small { color: #526b55; font-size: 12px; }
+.buy-layout { display: grid; gap: 20px; }
+.buy-layout .card { padding: 26px 29px; }
+.buy-entry { background: #f4f8f1; }
+.buy-kicker {
+  display: block;
+  color: #53735b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: none;
+}
+.buy-intro h2, .buy-section-head h2, .buy-empty h2, .buy-goal h2 {
+  margin: 8px 0 0;
+  font-family: var(--serif);
+  font-size: 21px;
+  line-height: 1.3;
+  letter-spacing: -0.025em;
+}
+.buy-intro p { margin: 8px 0 0; color: #536555; }
+.buy-fields { display: grid; grid-template-columns: 1fr minmax(180px, 240px); gap: 16px; margin-top: 24px; }
+.buy-field { display: grid; align-content: start; gap: 8px; color: #3a5543; font-size: 12px; font-weight: 650; }
+.buy-field small { margin-left: 4px; color: #536555; font-weight: 400; }
+.buy-field input { width: 100%; min-height: 50px; border-radius: 10px; font-size: 15px; }
+.buy-price-wrap { display: flex; align-items: center; position: relative; }
+.buy-price-wrap > span { position: absolute; left: 15px; color: #46634c; font-size: 18px; font-weight: 600; }
+.buy-price-wrap input { padding-left: 31px; font-size: 19px; font-weight: 650; }
+.buy-private { display: flex; align-items: center; gap: 6px; margin: 17px 0 0; color: #607362; font-size: 12px; }
+.buy-error { color: #a3342d; font-size: 12px; }
+.buy-results { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 20px; align-items: start; }
+.buy-section-head { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
+.buy-section-head h2 { margin-top: 5px; font-size: 19px; }
+.buy-date { padding: 6px 10px; border-radius: 999px; background: #f0f4ee; color: #56705c; white-space: nowrap; font-size: 11px; }
+.buy-metric-main { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-top: 31px; font-size: 12px; color: #5c6f5e; }
+.buy-metric-main strong { color: #2b4935; font-family: var(--serif); font-size: 21px; white-space: nowrap; }
+.buy-bar { height: 10px; overflow: hidden; margin-top: 11px; border-radius: 999px; background: #e8eee5; }
+.buy-bar span { display: block; height: 100%; border-radius: inherit; background: #70a577; }
+.buy-two-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 23px; }
+.buy-two-metrics > div { display: grid; gap: 4px; }
+.buy-two-metrics strong { font-family: var(--serif); font-size: 28px; line-height: 1; color: #315e47; }
+.buy-two-metrics span { font-size: 11px; line-height: 1.4; color: #647365; }
+.buy-context { margin: 22px 0 0; color: #5d6c5e; line-height: 1.5; }
+.buy-ledger { display: grid; gap: 13px; margin-top: 28px; padding-top: 19px; border-top: 1px solid #e4eae2; }
+.buy-ledger > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.buy-ledger span { color: #617064; }
+.buy-ledger strong { white-space: nowrap; font-weight: 650; }
+.buy-ledger .buy-ledger-total { align-items: baseline; padding-top: 15px; border-top: 1px solid #e4eae2; font-size: 13px; }
+.buy-ledger-total span { color: #2c4b37; font-weight: 650; }
+.buy-ledger-total strong { color: #315e47; font-family: var(--serif); font-size: 24px; }
+.buy-footnote { margin: 20px 0 0; color: #6b776b; font-size: 11px; line-height: 1.5; }
+.buy-invest-lead { margin: 22px 0 0; color: #586a5c; font-size: 12px; line-height: 1.5; }
+.buy-projection { display: grid; gap: 5px; margin-top: 17px; padding: 22px; border-radius: 14px; background: #f1f6ee; }
+.buy-projection span { color: #5c715d; font-size: 12px; }
+.buy-projection strong { color: #315e47; font-family: var(--serif); font-size: clamp(29px, 3vw, 38px); letter-spacing: -0.04em; }
+.buy-projection small { color: #57705c; font-size: 11px; line-height: 1.4; }
+.buy-assumptions { display: grid; gap: 8px; margin-top: 23px; }
+.buy-assumptions label { display: flex; justify-content: space-between; gap: 12px; color: #536655; font-size: 12px; }
+.buy-assumptions label strong { color: #315e47; }
+.buy-assumptions input[type="range"] { width: 100%; min-height: 26px; padding: 0; border: 0; accent-color: #315e47; }
+.buy-assumptions input[type="range"] + label { margin-top: 12px; }
+.buy-source { display: inline-flex; align-items: center; gap: 5px; margin-top: 13px; color: #315e47; font-size: 11px; font-weight: 650; }
+.buy-goal { grid-column: 1 / -1; display: flex; gap: 15px; align-items: center; }
+.buy-goal-icon { width: 38px; height: 38px; }
+.buy-goal h2 { margin: 0; font-size: 15px; }
+.buy-goal p { margin: 5px 0 0; color: #5c6c5e; font-size: 12px; line-height: 1.5; }
+.buy-empty { text-align: center; }
+.buy-empty-symbol { color: #8baa7f; font-size: 34px; }
+.buy-empty h2 { font-size: 17px; }
+.buy-empty p { max-width: 420px; margin: 8px auto 0; color: #667667; line-height: 1.5; }
+@media (max-width: 850px) {
+  .buy-results { grid-template-columns: 1fr; }
+  .buy-goal { grid-column: auto; }
+}
+@media (max-width: 700px) {
+  .calc-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+  .calc-tabs button { min-width: 0; white-space: normal; line-height: 1.2; }
+  .calc-panel { padding: 22px 20px; }
+  .calc-fields { gap: 16px; }
+  .buy-prompt { order: 2; }
+  .quiet-review { order: 3; }
+  .dashboard-accounts { order: 4; }
+  .upcoming-card { order: 5; }
+  .category-summary { order: 6; }
+  .dashboard-transactions { order: 7; }
+  .dashboard-goal { order: 8; }
+  .buy-layout .card { padding: 22px 20px; }
+  .buy-fields { grid-template-columns: 1fr; gap: 16px; }
+  .buy-intro h2 { font-size: 20px; }
+}
+@media (max-width: 360px) {
+  .calc-fields { grid-template-columns: 1fr; }
+  .buy-two-metrics strong { font-size: 24px; }
+  .buy-section-head h2 { font-size: 17px; }
+  .buy-ledger-total strong { font-size: 21px; }
+}

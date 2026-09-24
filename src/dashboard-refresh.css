@@ -1,0 +1,436 @@
+/* a warmer, more scannable dashboard while keeping sofar's own identity. */
+:root {
+  background: #f5f7f4;
+}
+
+.nav-item {
+  min-height: 44px;
+  border-radius: 11px;
+  font-size: 13px;
+}
+
+.nav-item.active {
+  background: #e7f0e8;
+  color: #254b35;
+}
+
+.month-picker,
+.button {
+  border-radius: 11px;
+}
+
+.heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.account-add {
+  color: #3f6048;
+}
+
+.account-add p,
+.info-box {
+  color: #526554;
+}
+
+.account-view {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 14px;
+  padding: 8px 0 0;
+  border: 0;
+  border-top: 1px solid #e4eae2;
+  background: transparent;
+  color: #315c42;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.table-toolbar > select {
+  min-height: 40px;
+}
+
+.field,
+.field small,
+.modal p {
+  color: #536555;
+}
+
+.card,
+.dashboard-card {
+  border-color: #e4eae2;
+  border-radius: 18px;
+  box-shadow: 0 3px 14px #253a2710;
+}
+
+.dashboard-layout {
+  gap: 22px;
+}
+
+.dashboard-primary,
+.dashboard-rail {
+  gap: 18px;
+}
+
+.dashboard-card-heading h2 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.dashboard-card-heading > span {
+  font-size: 12px;
+}
+
+.money-summary {
+  padding: 0;
+}
+
+.money-hero {
+  padding: 27px 30px 29px;
+  border-radius: 17px 17px 0 0;
+  background: #315e47;
+  color: #fff;
+}
+
+.money-summary .dashboard-card-heading h2 {
+  color: #e7f1e7;
+  font-size: 15px;
+  font-weight: 550;
+}
+
+.money-summary .budget-explanation summary {
+  color: #e7f1e7;
+}
+
+.money-summary .budget-explanation[open] > div {
+  color: #53634f;
+}
+
+.money-hero .dashboard-amount,
+.money-hero .dashboard-amount > span {
+  color: #fff;
+}
+
+.money-hero .dashboard-amount {
+  font-size: 54px;
+  line-height: 1.1;
+}
+
+.money-hero .dashboard-caption {
+  color: #deebde;
+  font-size: 13px;
+}
+
+.money-hero .daily-allowance {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 22px;
+  padding: 9px 15px;
+  border-radius: 999px;
+  background: #eff5ec;
+  color: #28513a;
+}
+
+.money-hero .daily-allowance strong {
+  font-size: 26px;
+}
+
+.money-hero .daily-allowance span {
+  font-size: 13px;
+}
+
+.money-summary .allocation-bar {
+  margin: 27px 30px 18px;
+  height: 9px;
+}
+
+.money-summary .allocation-labels {
+  padding: 0 30px;
+}
+
+.money-summary .allocation-labels > div > span {
+  font-size: 12px;
+}
+
+.money-summary .allocation-labels strong {
+  font-size: 16px;
+}
+
+.money-summary .income-summary {
+  margin: 0;
+  padding: 19px 30px;
+  border-radius: 0 0 17px 17px;
+  background: #f8faf7;
+}
+
+.money-summary .income-summary span,
+.money-summary .income-summary small {
+  font-size: 11px;
+}
+
+.money-summary .income-summary strong {
+  font-size: 15px;
+}
+
+.quiet-review {
+  min-height: 57px;
+  border-radius: 14px;
+  background: #e8f0e8;
+  border-color: #dbe7db;
+  color: #2f5c40;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.review-skip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 12px;
+  border: 0;
+  background: transparent;
+  color: #315d43;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dismissed-patterns {
+  padding: 18px 23px;
+}
+
+.dismissed-patterns summary {
+  cursor: pointer;
+  color: #506452;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dismissed-patterns .recurring-row:first-of-type {
+  margin-top: 14px;
+}
+
+.month-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 17px;
+  padding: 14px 17px;
+  border-radius: 12px;
+  background: #f3f7f2;
+}
+
+.month-total span {
+  color: #5a6b5e;
+  font-size: 13px;
+}
+
+.month-total strong {
+  font-family: var(--serif);
+  font-size: 25px;
+  font-weight: 550;
+  letter-spacing: -0.5px;
+}
+
+.category-summary-row {
+  min-height: 65px;
+}
+
+.category-symbol,
+.merchant-icon,
+.account-mini-icon {
+  border-radius: 11px;
+}
+
+.category-summary-label > strong,
+.dashboard-transactions .transaction-name strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.category-summary-label > small,
+.dashboard-transactions .transaction-name > span {
+  font-size: 11px;
+}
+
+.dashboard-transactions .tx-amount {
+  font-size: 13px;
+}
+
+.transaction-row {
+  transition: background 0.15s ease;
+  cursor: pointer;
+}
+
+.transaction-row:hover,
+.transaction-row:focus-within {
+  background: #f8faf7;
+}
+
+.transaction-row .tx-more,
+.dashboard-transactions .tx-more {
+  position: static;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+  color: #687a6b;
+  cursor: pointer;
+}
+
+.transaction-row .tx-more svg {
+  position: static;
+  transform: none;
+}
+
+.transaction-row .tx-more:focus-visible {
+  outline: 2px solid #315e47;
+  outline-offset: 2px;
+  border-radius: 9px;
+}
+
+.dashboard-account,
+.upcoming-row {
+  min-height: 60px;
+}
+
+.dashboard-account strong,
+.upcoming-row > span:nth-child(2) {
+  font-size: 12px;
+}
+
+.dashboard-account small {
+  font-size: 10px;
+}
+
+.dashboard-account > b,
+.upcoming-row > strong {
+  font-size: 12px;
+}
+
+.recurring-row span:not(.merchant-icon):not(.pill) {
+  color: #5a6a5a;
+  font-size: 11px;
+}
+
+.recurring-row > .icon-button {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+@media (max-width: 700px) {
+  main {
+    padding: 23px 15px 105px;
+  }
+
+  .page-heading:has(.heading-actions) {
+    align-items: flex-start;
+  }
+
+  .heading-actions {
+    justify-content: flex-end;
+  }
+
+  .heading-actions .button {
+    min-height: 40px;
+    font-size: 11px;
+  }
+
+  .dashboard-layout {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 15px;
+  }
+
+  .dashboard-primary,
+  .dashboard-rail {
+    display: contents;
+  }
+
+  .money-summary { order: 1; }
+  .quiet-review { order: 2; }
+  .dashboard-accounts { order: 3; }
+  .upcoming-card { order: 4; }
+  .category-summary { order: 5; }
+  .dashboard-transactions { order: 6; }
+  .dashboard-goal { order: 7; }
+
+  .dashboard-card {
+    padding: 21px;
+  }
+
+  .money-summary {
+    padding: 0;
+  }
+
+  .money-hero {
+    padding: 24px 23px 25px;
+  }
+
+  .money-hero .dashboard-amount {
+    font-size: 47px;
+  }
+
+  .money-summary .allocation-bar {
+    margin: 25px 23px 16px;
+  }
+
+  .money-summary .allocation-labels {
+    padding: 0 23px;
+  }
+
+  .money-summary .income-summary {
+    padding: 17px 23px;
+  }
+
+  .month-total strong {
+    font-size: 22px;
+  }
+
+  .dashboard-accounts,
+  .upcoming-card {
+    padding-bottom: 0;
+  }
+
+  .transaction-page .merchant-icon {
+    width: 31px;
+    height: 31px;
+    font-size: 13px;
+  }
+
+  .transaction-page .transaction-name strong {
+    font-size: 12px;
+  }
+
+  .transaction-page .transaction-name > span {
+    font-size: 10px;
+  }
+
+  .transaction-page .tx-amount {
+    min-width: 68px;
+    font-size: 11px;
+  }
+
+  .transaction-page .pill {
+    display: none;
+  }
+
+  .transaction-page .tx-more,
+  .dashboard-transactions .tx-more {
+    width: 28px;
+    height: 40px;
+  }
+}
