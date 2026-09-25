@@ -1,168 +1,69 @@
-import { useState } from "react";
-import { ArrowRight, CircleHelp, Sprout } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import RollingNumber from "./RollingNumber";
+import { emitHaptic, reducedMotion } from "./motion";
 import { budget, money, type State } from "./model";
-import { investmentProjection, purchaseImpact } from "./purchaseMath";
+import { spendingGuide } from "./Dashboard";
+import { investmentProjection } from "./purchaseMath";
 
-const oneDecimal = (value: number) =>
-  new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
+const decimal = (value: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 
-export default function ShouldIBuy({ state, onExplore }: { state: State; onExplore?: () => void }) {
-  const [priceText, setPriceText] = useState("");
-  const [item, setItem] = useState("");
-  const [years, setYears] = useState(10);
-  const [rate, setRate] = useState(5);
-  const priceNumber = Number(priceText);
-  const price =
-    priceText.trim() !== "" &&
-    Number.isFinite(priceNumber) &&
-    priceNumber >= 0.01 &&
-    priceNumber <= 1_000_000
-      ? Math.round(priceNumber * 100)
-      : null;
-  const now = new Date();
-  const b = budget(state, now);
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const impact =
-    price === null
-      ? null
-      : purchaseImpact(price, b.safe, b.totals.spending, daysInMonth);
-  const projection =
-    price === null ? null : investmentProjection(price, rate, years);
-  const goalRemaining = Math.max(0, state.goal.target - state.goal.saved);
-  const purchaseName = item.trim() || "this purchase";
-
-  return (
-    <div className="buy-layout">
-      {onExplore && <button className="calc-buy-link" onClick={onExplore}>
-        <span className="calc-buy-icon"><Sprout size={19} /></span>
-        <span><strong>more calculators</strong><small>explore savings, emergency funds, debt, and investing</small></span>
-        <ArrowRight size={17} />
-      </button>}
-      <section className="card buy-entry">
-        <div className="buy-intro">
-          <span className="buy-kicker">a little pause before you decide</span>
-          <h2>what are you thinking of buying?</h2>
-          <p>see what it would mean for your plan. it’s your call, always.</p>
-        </div>
-        <div className="buy-fields">
-          <label className="buy-field" htmlFor="buy-item">
-            <span>what is it? <small>optional</small></span>
-            <input
-              id="buy-item"
-              autoComplete="off"
-              maxLength={60}
-              placeholder="e.g. a weekend away"
-              value={item}
-              onChange={(event) => setItem(event.target.value)}
-            />
-          </label>
-          <label className="buy-field buy-price-field" htmlFor="buy-price">
-            <span>price</span>
-            <span className="buy-price-wrap">
-              <span aria-hidden="true">$</span>
-              <input
-                id="buy-price"
-                type="number"
-                inputMode="decimal"
-                min="0.01"
-                max="1000000"
-                step="0.01"
-                placeholder="0.00"
-                value={priceText}
-                onChange={(event) => setPriceText(event.target.value)}
-              />
-            </span>
-          </label>
-        </div>
-        {priceText && price === null && (
-          <p className="buy-error" role="alert">enter a price between $0.01 and $1,000,000.</p>
-        )}
-        <p className="buy-private"><CircleHelp size={15} /> this is just a comparison. nothing is added to your transactions.</p>
+export default function ShouldIBuy({ state, onExplore, onDone, onSleep }: { state: State; onExplore?: () => void; onDone?: () => void; onSleep?: (item: string, price: number) => void }) {
+  const [item, setItem] = useState("new headphones");
+  const [priceText, setPriceText] = useState("180");
+  const [rate, setRate] = useState(7);
+  const n = Number(priceText);
+  const price = priceText.trim() && Number.isFinite(n) && n >= .01 && n <= 1_000_000 ? Math.round(n * 100) : null;
+  const guide = spendingGuide(state);
+  const b = budget(state);
+  const days = price !== null && guide.perDay > 0 ? price / guide.perDay : null;
+  const share = price !== null && guide.left > 0 ? price / guide.left * 100 : null;
+  const after = price !== null ? guide.left - price : null;
+  const perDayAfter = after !== null ? Math.round(after / guide.daysLeft) : null;
+  const quick = [25, 80, 180, 600];
+  const answer = useRef<HTMLElement>(null);
+  const previousBucket = useRef<number | null>(null);
+  const bucket = price === null ? 0 : days !== null && days < 1 ? 1 : after !== null && after >= 0 ? 2 : 3;
+  useEffect(() => {
+    if (previousBucket.current !== null && previousBucket.current !== bucket && !reducedMotion()) {
+      const easing = getComputedStyle(document.documentElement).getPropertyValue("--sp-fast").trim() || "cubic-bezier(.2,.8,.2,1)";
+      answer.current?.animate([{ transform: "scale(.9)", borderRadius: "34px" }, { transform: "none", borderRadius: "20px" }], { duration: 420, easing });
+    }
+    previousBucket.current = bucket;
+  }, [bucket]);
+  return <div className="design-buy">
+    <div className="design-buy-breadcrumb"><button onClick={onExplore}><ArrowLeft size={16} /> tools</button><span>/</span><h1>should i buy this?</h1></div>
+    <div className="design-buy-grid">
+      <div className="design-buy-main">
+        <section className="design-buy-entry">
+          <label htmlFor="design-buy-item" className="sr-only">what are you buying?</label>
+          <input id="design-buy-item" className="design-buy-item" value={item} maxLength={60} onChange={event => setItem(event.target.value)} placeholder="what are you thinking of buying?" />
+          <label htmlFor="design-buy-price" className="sr-only">price in dollars</label>
+          <div className="design-buy-price"><span aria-hidden="true">$</span><input id="design-buy-price" type="number" min="0.01" max="1000000" step="0.01" inputMode="decimal" value={priceText} onChange={event => setPriceText(event.target.value)} onBlur={event => { if (priceText && price === null) { emitHaptic("error"); event.currentTarget.animate([{ transform: "translateX(0)" }, { transform: "translateX(-7px)" }, { transform: "translateX(5px)" }, { transform: "translateX(-3px)" }, { transform: "none" }], { duration: 360, easing: "ease-out" }); } }} placeholder="0" /></div>
+          <div className="design-buy-quick" role="group" aria-label="quick prices">{quick.map(value => <button key={value} type="button" data-h="tick" className={Number(priceText) === value ? "active" : ""} onClick={() => setPriceText(String(value))}>${value}</button>)}</div>
+          {priceText && price === null && <p className="design-buy-error" role="alert">enter a price between $0.01 and $1,000,000.</p>}
+        </section>
+        <section className="design-buy-answer" ref={answer} aria-live="polite">
+          <span>that’s</span>
+          <strong>{days === null ? "—" : <><RollingNumber value={days} format={value => decimal(value)} /> days</>}</strong>
+          <span>of spending, at {money(guide.perDay)}/day</span>
+        </section>
+        <section className="design-buy-impact">
+          <div><span>of your {money(guide.left)} left this month</span><strong>{share === null ? "—" : <><RollingNumber value={share} format={value => String(Math.round(value))} />%</>}</strong></div>
+          <div className="design-buy-track"><span style={{ width: `${Math.min(100, Math.max(0, share || 0))}%` }} /></div>
+          <p>{price === null ? "add a price to see how it fits." : after! >= 0 ? `fits. you’d have ${money(after!)} left this month, about ${money(perDayAfter!)} a day.` : `this would put the month ${money(Math.abs(after!))} over your current spending plan.`}</p>
+        </section>
+      </div>
+      <section className="design-buy-invest">
+        <p>or, if you invested it instead</p>
+        {[1, 5, 10].map(years => <div key={years}><span>in {years} {years === 1 ? "yr" : "yrs"}</span><strong>{price === null ? "—" : <RollingNumber value={investmentProjection(price, rate, years).projected} format={value => money(Math.round(value))} />}</strong></div>)}
+        <details><summary>assumptions</summary><label htmlFor="design-buy-rate">hypothetical annual return: {rate}%</label><input id="design-buy-rate" type="range" min="-10" max="15" step=".5" value={rate} onChange={event => setRate(Number(event.target.value))} /><small>compounded annually, before taxes, fees, and inflation. actual returns vary and can be negative.</small></details>
       </section>
-
-      {impact && projection && price !== null ? (
-        <div className="buy-results" aria-live="polite">
-          <section className="card buy-impact">
-            <div className="buy-section-head">
-              <div>
-                <span className="buy-kicker">your budget</span>
-                <h2>where {purchaseName} fits</h2>
-              </div>
-              <span className="buy-date">this month</span>
-            </div>
-            <div className="buy-metric-main">
-              <span>your monthly safe-to-spend plan</span>
-              <strong>{money(b.safe, true)}</strong>
-            </div>
-            {impact.shareOfAllowance !== null ? (
-              <>
-                <div className="buy-bar" role="img" aria-label={`${oneDecimal(impact.shareOfAllowance)} percent of your monthly safe-to-spend plan`}>
-                  <span style={{ width: `${Math.min(100, impact.shareOfAllowance)}%` }} />
-                </div>
-                <div className="buy-two-metrics">
-                  <div>
-                    <strong>{oneDecimal(impact.shareOfAllowance)}%</strong>
-                    <span>of your monthly plan</span>
-                  </div>
-                  <div>
-                    <strong>{oneDecimal(impact.daysOfAllowance!)}</strong>
-                    <span>days of your per-day guide</span>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <p className="buy-context">your monthly safe-to-spend plan is {b.safe < 0 ? "below zero" : "zero"}, so there isn’t an allowance to compare this price with yet.</p>
-            )}
-            <div className="buy-ledger">
-              <div><span>monthly plan</span><strong>{money(b.safe, true)}</strong></div>
-              <div><span>confirmed day-to-day spending</span><strong>− {money(b.totals.spending, true)}</strong></div>
-              <div><span>this purchase</span><strong>− {money(price, true)}</strong></div>
-              <div className="buy-ledger-total"><span>planning room after</span><strong>{money(impact.roomAfter, true)}</strong></div>
-            </div>
-            <p className="buy-footnote">planning room is based on your monthly allowance and confirmed day-to-day spending so far. it isn’t an account balance.</p>
-          </section>
-
-          <section className="card buy-invest">
-            <div className="buy-section-head">
-              <div>
-                <span className="buy-kicker">the other possibility</span>
-                <h2>what if you invested it?</h2>
-              </div>
-              <span className="buy-invest-icon"><Sprout size={21} /></span>
-            </div>
-            <p className="buy-invest-lead">a one-time {money(price, true)} investment could grow to this amount under your assumptions:</p>
-            <div className="buy-projection">
-              <span>hypothetical value after {years} {years === 1 ? "year" : "years"}</span>
-              <strong>{money(projection.projected, true)}</strong>
-              <small>{projection.growth >= 0 ? "+" : "−"}{money(Math.abs(projection.growth), true)} {projection.growth >= 0 ? "growth" : "change"} compared with the original amount</small>
-            </div>
-            <div className="buy-assumptions">
-              <label htmlFor="buy-years"><span>time invested</span><strong>{years} {years === 1 ? "year" : "years"}</strong></label>
-              <input id="buy-years" type="range" min="1" max="40" step="1" value={years} onChange={(event) => setYears(Number(event.target.value))} />
-              <label htmlFor="buy-rate"><span>assumed annual return</span><strong>{rate}%</strong></label>
-              <input id="buy-rate" type="range" min="-10" max="15" step="0.5" value={rate} onChange={(event) => setRate(Number(event.target.value))} />
-            </div>
-            <p className="buy-footnote">hypothetical compound growth, with no extra contributions. before taxes, fees, and inflation. actual returns can be lower or negative; this is not a forecast.</p>
-            <a className="buy-source" href="https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins-47" target="_blank" rel="noopener noreferrer">about investment projections <ArrowRight size={14} /></a>
-          </section>
-
-          {goalRemaining > 0 && (
-            <section className="card buy-goal">
-              <span className="buy-goal-icon"><Sprout size={18} /></span>
-              <div>
-                <h2>your {state.goal.name.toLowerCase()} goal</h2>
-                <p>{money(goalRemaining, true)} left to reach it. {money(price, true)} is {oneDecimal((price / goalRemaining) * 100)}% of that remaining amount.</p>
-              </div>
-            </section>
-          )}
-        </div>
-      ) : (
-        <div className="card buy-empty">
-          <span className="buy-empty-symbol">✳</span>
-          <h2>start with a price</h2>
-          <p>we’ll compare it with your spending plan, your per-day guide, your goal, and a hypothetical investment.</p>
-        </div>
-      )}
     </div>
-  );
+    <div className="design-buy-actions">
+      <button type="button" data-h="soft" onClick={() => price !== null && onSleep?.(item.trim() || "this purchase", price)} disabled={price === null}>sleep on it</button>
+      <button type="button" data-h="success" onClick={onDone}>done</button>
+    </div>
+    <p className="design-buy-note">this is a comparison, not a purchase or an account balance. nothing is added to your transactions.</p>
+  </div>;
 }

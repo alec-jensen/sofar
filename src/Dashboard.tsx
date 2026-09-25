@@ -1,347 +1,80 @@
-import type { ReactNode } from "react";
-import {
-  ArrowRight,
-  ChevronRight,
-  CircleHelp,
-  Home,
-  Inbox,
-  Landmark,
-  Plus,
-  Repeat2,
-  ShoppingBag,
-  Sprout,
-  Wallet,
-} from "lucide-react";
-import {
-  budget,
-  dailyAllowance,
-  money,
-  type Category,
-  type State,
-  type Transaction,
-} from "./model";
+import { ArrowRight, RefreshCw } from "lucide-react";
+import { budget, money, type Category, type State, type Transaction } from "./model";
+import RollingNumber from "./RollingNumber";
+import { usePullToSync } from "./usePullToSync";
+import type { CSSProperties, ReactNode } from "react";
 
+type Page = "Transactions" | "Accounts" | "Recurring" | "Savings goal" | "Review inbox" | "Should I buy this" | "Calculators";
 type Props = {
   state: State;
   period: Date;
   count: number;
   transactions: Transaction[];
   renderTransaction: (transaction: Transaction) => ReactNode;
-  onPage: (
-    page:
-      | "Transactions"
-      | "Accounts"
-      | "Recurring"
-      | "Savings goal"
-      | "Review inbox"
-      | "Should I buy this",
-  ) => void;
+  onPage: (page: Page) => void;
   onCategory: (category: Category) => void;
   onLink: () => void;
+  onSync?: () => void | Promise<void>;
+  syncing?: boolean;
 };
 
-export default function Dashboard({
-  state,
-  period,
-  count,
-  transactions,
-  renderTransaction,
-  onPage,
-  onCategory,
-  onLink,
-}: Props) {
-  const b = budget(state, period);
-  const daysInMonth = new Date(
-    period.getFullYear(),
-    period.getMonth() + 1,
-    0,
-  ).getDate();
-  const committed = Math.max(0, b.bills);
-  const savings = Math.max(0, state.goal.monthly);
-  const free = Math.max(0, b.safe);
-  const total = Math.max(1, committed + savings + free);
+export function spendingGuide(state: State, now = new Date()) {
+  const b = budget(state, now);
+  const daysLeft = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate() + 1;
+  const left = b.safe - b.totals.spending;
+  return { left, daysLeft, perDay: Math.round(left / daysLeft) };
+}
+
+export default function Dashboard({ state, count, onPage, onSync, syncing }: Props) {
+  const pull = usePullToSync(onSync, syncing);
+  const now = new Date();
+  const b = budget(state, now);
+  const guide = spendingGuide(state, now);
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const upcoming = state.recurring
-    .filter(
-      (r) =>
-        r.confirmed &&
-        !r.dismissed &&
-        r.type === "bill" &&
-        r.nextDate >= new Date().toLocaleDateString("en-CA"),
-    )
+    .filter(r => r.confirmed && !r.dismissed && r.type === "bill" && r.nextDate >= today)
     .sort((a, b) => a.nextDate.localeCompare(b.nextDate))
     .slice(0, 3);
-  const categoryRows: {
-    id: Category;
-    icon: typeof Home;
-    description: string;
-  }[] = [
-    { id: "expenses", icon: Home, description: "bills and essentials" },
-    { id: "spending", icon: Wallet, description: "day to day" },
-    { id: "savings", icon: Sprout, description: "set aside" },
-  ];
-  return (
-    <div className="dashboard-layout">
-      <div className="dashboard-primary">
-        <section className="dashboard-card money-summary">
-          <div className="money-hero">
-            <div className="dashboard-card-heading">
-              <h2>safe to spend</h2>
-              <details className="budget-explanation">
-                <summary aria-label="how safe to spend works">
-                  <CircleHelp size={17} />
-                </summary>
-                <div>
-                  <strong>here’s the math</strong>
-                  <p>
-                    your average confirmed income from the last three complete
-                    months, minus recurring bills and your monthly savings
-                    contribution.
-                  </p>
-                  <p>
-                    salary and self-employment stay separate. transfers,
-                    repayments, and unreviewed income aren’t included.
-                  </p>
-                  <p>
-                    this is a monthly allowance. your current account balances
-                    are shown separately.
-                  </p>
-                  <p>
-                    the per-day guide spreads that monthly amount evenly across
-                    the {daysInMonth} days in this month.
-                  </p>
-                </div>
-              </details>
-            </div>
-            <div className="dashboard-amount">
-              {money(b.safe, true).slice(0, -3)}
-              <span>.{String(Math.abs(b.safe) % 100).padStart(2, "0")}</span>
-            </div>
-            <p className="dashboard-caption">after bills and savings</p>
-            <div className="daily-allowance">
-              <strong>{money(dailyAllowance(b.safe, period), true)}</strong>
-              <span>per day</span>
-            </div>
-          </div>
-          <div
-            className="allocation-bar"
-            role="img"
-            aria-label={`${money(b.bills)} in bills, ${money(state.goal.monthly)} for savings, ${money(b.safe)} safe to spend`}
-          >
-            <i
-              className="allocation-bills"
-              style={{ width: `${(committed / total) * 100}%` }}
-            />
-            <i
-              className="allocation-savings"
-              style={{ width: `${(savings / total) * 100}%` }}
-            />
-            <i
-              className="allocation-free"
-              style={{ width: `${(free / total) * 100}%` }}
-            />
-          </div>
-          <div className="allocation-labels">
-            <div>
-              <span>
-                <i className="allocation-bills" />
-                bills
-              </span>
-              <strong>{money(b.bills)}</strong>
-            </div>
-            <div>
-              <span>
-                <i className="allocation-savings" />
-                savings
-              </span>
-              <strong>{money(state.goal.monthly)}</strong>
-            </div>
-            <div>
-              <span>
-                <i className="allocation-free" />
-                available
-              </span>
-              <strong>{money(b.safe)}</strong>
-            </div>
-          </div>
-          <div className="income-summary">
-            <div>
-              <span>salary average</span>
-              <strong>
-                {money(b.salary)}
-                <small> / mo</small>
-              </strong>
-            </div>
-            <div>
-              <span>self-employed average</span>
-              <strong>
-                {money(b.selfEmployed)}
-                <small> / mo</small>
-              </strong>
-            </div>
-          </div>
-        </section>
-        <button className="buy-prompt" onClick={() => onPage("Should I buy this")}>
-          <span className="buy-prompt-icon"><ShoppingBag size={19} /></span>
-          <span><strong>should i buy this?</strong><small>see how a price fits your plan</small></span>
-          <ArrowRight size={18} />
-        </button>
-        {count > 0 && (
-          <button
-            className="quiet-review"
-            onClick={() => onPage("Review inbox")}
-          >
-            <Inbox size={18} />
-            <span>{count} things to review</span>
-            <ArrowRight size={17} />
-          </button>
-        )}
-        <section className="dashboard-card category-summary">
-          <div className="dashboard-card-heading">
-            <h2>this month</h2>
-            <span>confirmed so far</span>
-          </div>
-          <div className="month-total">
-            <span>spent so far</span>
-            <strong>{money(b.totals.expenses + b.totals.spending, true)}</strong>
-          </div>
-          {categoryRows.map(({ id, icon: Icon, description }) => (
-            <button
-              key={id}
-              className="category-summary-row"
-              onClick={() => onCategory(id)}
-            >
-              <span className={`category-symbol ${id}`}>
-                <Icon size={18} />
-              </span>
-              <span className="category-summary-label">
-                <strong>{state.categories[id]}</strong>
-                <small>{description}</small>
-              </span>
-              <strong>{money(b.totals[id], true)}</strong>
-              <ChevronRight size={15} />
-            </button>
-          ))}
-        </section>
-        <section className="dashboard-card dashboard-transactions">
-          <div className="dashboard-card-heading">
-            <h2>recent transactions</h2>
-            <button
-              className="text-button"
-              onClick={() => onPage("Transactions")}
-            >
-              view all
-              <ArrowRight size={14} />
-            </button>
-          </div>
-          {transactions.length ? (
-            transactions.slice(0, 5).map(renderTransaction)
-          ) : (
-            <div className="dashboard-empty">nothing here yet.</div>
-          )}
-        </section>
-      </div>
-      <aside className="dashboard-rail">
-        <section className="dashboard-card dashboard-accounts">
-          <div className="dashboard-card-heading">
-            <h2>accounts</h2>
-            <button
-              className="icon-button"
-              aria-label="connect an account"
-              onClick={onLink}
-            >
-              <Plus size={18} />
-            </button>
-          </div>
-          {state.accounts.map((a) => (
-            <button
-              className="dashboard-account"
-              key={a.id}
-              onClick={() => onPage("Accounts")}
-            >
-              <span className="account-mini-icon">
-                <Landmark size={17} />
-              </span>
-              <span>
-                <strong>{a.subtype || a.type}</strong>
-                <small>
-                  {a.institution} · {a.mask}
-                </small>
-              </span>
-              <b>{money(a.balance, true)}</b>
-            </button>
-          ))}
-          {!state.accounts.length && (
-            <button className="text-button" onClick={onLink}>
-              connect your first account
-              <Plus size={14} />
-            </button>
-          )}
-          <button
-            className="dashboard-section-link"
-            onClick={() => onPage("Accounts")}
-          >
-            all accounts
-            <ChevronRight size={15} />
-          </button>
-        </section>
-        <section className="dashboard-card upcoming-card">
-          <div className="dashboard-card-heading">
-            <h2>upcoming</h2>
-            <Repeat2 size={16} />
-          </div>
-          {upcoming.map((r) => {
-            const date = new Date(r.nextDate + "T12:00:00");
-            return (
-              <button
-                className="upcoming-row"
-                key={r.id}
-                onClick={() => onPage("Recurring")}
-              >
-                <span className="bill-date">
-                  <small>
-                    {date.toLocaleDateString("en-US", { month: "short" })}
-                  </small>
-                  <b>{date.getDate()}</b>
-                </span>
-                <span>{r.merchant}</span>
-                <strong>{money(r.amount, true)}</strong>
-              </button>
-            );
-          })}
-          {!upcoming.length && (
-            <p className="dashboard-empty">no confirmed bills coming up.</p>
-          )}
-          <button
-            className="dashboard-section-link"
-            onClick={() => onPage("Recurring")}
-          >
-            all recurring
-            <ChevronRight size={15} />
-          </button>
-        </section>
-        <section className="dashboard-card dashboard-goal">
-          <div className="dashboard-card-heading">
-            <h2>savings goal</h2>
-            <Sprout size={17} />
-          </div>
-          <button className="goal-open" onClick={() => onPage("Savings goal")}>
-            <span>{state.goal.name}</span>
-            <ChevronRight size={15} />
-          </button>
-          <div className="goal-mini-value">
-            <strong>{money(state.goal.saved)}</strong>
-            <span> / {money(state.goal.target)}</span>
-          </div>
-          <div className="progress-track">
-            <i
-              style={{
-                width: `${Math.min(100, (state.goal.saved / Math.max(1, state.goal.target)) * 100)}%`,
-              }}
-            />
-          </div>
-          <p>{money(state.goal.monthly)} set aside each month</p>
-        </section>
-      </aside>
+  const syncMinutes = Math.max(0, Math.floor((Date.now() - new Date(state.lastSync).getTime()) / 60000));
+  const syncLabel = syncMinutes < 1 ? "synced just now" : syncMinutes < 60 ? `synced ${syncMinutes} min ago` : `synced ${Math.floor(syncMinutes / 60)} hr ago`;
+  const goalPercent = Math.min(100, (state.goal.saved / Math.max(1, state.goal.target)) * 100);
+  return <div className="reference-home" ref={pull.root} style={{ "--pull-y": `${pull.pull}px` } as CSSProperties}>
+    <div className="reference-pull-indicator" aria-hidden="true" style={{ opacity: Math.min(1, pull.pull / 50) }}>{syncing ? "syncing…" : pull.pull > 64 ? "release to sync" : "pull to sync"}</div>
+    <div className="reference-home-top">
+      <strong className="reference-mobile-brand">sofar<span>.</span></strong>
+      <span className="reference-date">{now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }).toLowerCase()}</span>
+      <button className="reference-sync" data-h="press" type="button" disabled={syncing} onClick={onSync}><span className="reference-dot" />{syncing ? "syncing…" : syncLabel}<RefreshCw data-sync-spin={syncing} size={13} /></button>
     </div>
-  );
+    <div className="reference-home-grid">
+      <div className="reference-hero">
+        <h1 className="reference-hero-label">safe to spend today</h1>
+        <strong className="reference-hero-number"><RollingNumber value={guide.perDay} format={value => money(Math.round(value))} /></strong>
+        <p className="reference-hero-sub">{money(guide.left)} left this month · {guide.daysLeft} {guide.daysLeft === 1 ? "day" : "days"}</p>
+        <button className="reference-review" onClick={() => onPage("Review inbox")} aria-label={`${count} to review`}>
+          <span className="reference-review-count">{count}</span>
+          <span className="reference-review-copy"><strong>{count ? `${count} to review` : "all caught up"}</strong><small>{count ? "about a minute" : "nothing needs your attention"}</small></span>
+          <span className="reference-review-go">go</span>
+        </button>
+        <button className="reference-income" onClick={() => onPage("Transactions")}>
+          <span><small>income, last 3 mo avg</small><strong>{money(b.income)}/mo</strong></span>
+          <span className="reference-income-bars" aria-hidden="true"><i /><i /><i /></span>
+        </button>
+      </div>
+      <div className="reference-home-rail">
+        <button className="reference-goal reference-tile" onClick={() => onPage("Savings goal")}>
+          <span className="reference-tile-heading"><span>{state.goal.name}</span><small>{goalPercent >= 100 ? "goal reached" : "on your way"}</small></span>
+          <span className="reference-goal-number"><strong>{money(state.goal.saved)}</strong> of {money(state.goal.target)}</span>
+          <span className="reference-progress"><i style={{ width: `${goalPercent}%` }} /></span>
+        </button>
+        <button className="reference-upcoming reference-tile" onClick={() => onPage("Recurring")}>
+          <span className="reference-tile-heading"><span>coming up</span><small>already set aside</small></span>
+          {upcoming.length ? upcoming.map(r => <span className="reference-bill" key={r.id}><span>{r.merchant.toLowerCase()}</span><span>{new Date(r.nextDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }).toLowerCase()} · {money(r.amount)}</span></span>) : <span className="reference-bill">no bills coming up</span>}
+        </button>
+        <button className="reference-buy-link" onClick={() => onPage("Should I buy this")}>
+          <span><strong>should i buy this?</strong><small>quick gut-check before you tap pay</small></span><span>open <ArrowRight size={14} /></span>
+        </button>
+      </div>
+    </div>
+    <p className="reference-home-note">your daily guide uses this month’s safe-to-spend plan, minus confirmed spending so far. it isn’t your account balance.</p>
+  </div>;
 }

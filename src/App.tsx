@@ -1,6 +1,12 @@
 import Dashboard from "./Dashboard";
 import ShouldIBuy from "./ShouldIBuy";
 import Calculators from "./Calculators";
+import Categories from "./Categories";
+import SortingRules from "./SortingRules";
+import { configureMotion, emitHaptic, installFeedback, playPageEntrance, setHapticEnabled, type MotionMode } from "./motion";
+import { useSwipeCard } from "./useSwipeCard";
+import { useSheetDrag } from "./useSheetDrag";
+import { useSheetFocus } from "./useSheetFocus";
 import {
   useEffect,
   useRef,
@@ -30,9 +36,7 @@ import {
   Leaf,
   Link2,
   Loader2,
-  LockKeyhole,
   LogOut,
-  Menu,
   MoreHorizontal,
   Plus,
   RefreshCw,
@@ -70,6 +74,8 @@ type Page =
   | "Overview"
   | "Should I buy this"
   | "Calculators"
+  | "Categories"
+  | "Sorting rules"
   | "Transactions"
   | "Review inbox"
   | "Recurring"
@@ -81,6 +87,8 @@ const pageHashes: Record<Page, string> = {
   Overview: "#overview",
   "Should I buy this": "#buy",
   Calculators: "#calculators",
+  Categories: "#categories",
+  "Sorting rules": "#rules",
   Transactions: "#transactions",
   "Review inbox": "#review",
   Recurring: "#recurring",
@@ -96,6 +104,8 @@ const icons = {
   Overview: Home,
   "Should I buy this": ShoppingBag,
   Calculators: Calculator,
+  Categories: Wallet,
+  "Sorting rules": Settings2,
   Transactions: ArrowDownLeft,
   "Review inbox": Inbox,
   Recurring: Repeat2,
@@ -147,22 +157,43 @@ export default function App() {
     [modal, setModal] = useState<ReactNode>(null),
     [busy, setBusy] = useState(false),
     [offline, setOffline] = useState(!navigator.onLine),
-    [menu, setMenu] = useState(false),
     [compact, setCompact] = useState(window.innerWidth <= 700),
     [monthOffset, setMonthOffset] = useState(0),
     [pushEnabled, setPushEnabled] = useState(false),
-    [totpEnabled, setTotpEnabled] = useState(false);
+    [totpEnabled, setTotpEnabled] = useState(false),
+    [hapticsEnabled, setHapticsEnabled] = useState(() => localStorage.getItem("sofar-haptics") !== "off"),
+    [motionMode, setMotionMode] = useState<MotionMode>(() => {
+      const saved = localStorage.getItem("sofar-motion");
+      return saved === "calm" || saved === "off" ? saved : "expressive";
+    });
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("all"),
     [accountFilter, setAccountFilter] = useState("all"),
+    [historyDate, setHistoryDate] = useState<"this month" | "all time">("this month"),
+    [historyFiltersOpen, setHistoryFiltersOpen] = useState(false),
+    [expandedTransaction, setExpandedTransaction] = useState<string | null>(null),
     [reviewCategory, setReviewCategory] = useState<Category | null>(null),
+    [reviewSubcategoryId, setReviewSubcategoryId] = useState<string | undefined>(undefined),
     [stream, setStream] = useState("salary"),
     [reviewPicker, setReviewPicker] = useState(false),
     [reviewId, setReviewId] = useState("");
-  const touch = useRef(0);
   const actionInFlight = useRef(false);
   const liveState = useRef(s);
   liveState.current = s;
+  useEffect(() => installFeedback(), []);
+  useEffect(() => { setHapticEnabled(hapticsEnabled); }, [hapticsEnabled]);
+  useEffect(() => {
+    configureMotion(motionMode);
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => configureMotion(motionMode);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [motionMode]);
+  useEffect(() => {
+    if (auth !== "ready") return;
+    const frame = requestAnimationFrame(() => playPageEntrance(page));
+    return () => cancelAnimationFrame(frame);
+  }, [auth, page]);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 700px)");
     const update = () => setCompact(query.matches);
@@ -172,7 +203,6 @@ export default function App() {
   useEffect(() => {
     const onHashChange = () => {
       setPage(pageFromHash());
-      setMenu(false);
       window.scrollTo(0, 0);
     };
     window.addEventListener("hashchange", onHashChange);
@@ -238,7 +268,7 @@ export default function App() {
       navigator.serviceWorker.removeEventListener("message", listener);
   }, []);
   useEffect(() => {
-    if (!modal) return;
+    if (!modal && !historyFiltersOpen && !reviewPicker) return;
     const before = document.activeElement as HTMLElement | null;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
     const selector =
@@ -265,12 +295,13 @@ export default function App() {
       document.removeEventListener("keydown", trap);
       before?.focus();
     };
-  }, [modal]);
+  }, [modal, historyFiltersOpen, reviewPicker]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setModal(null);
-        setMenu(false);
+        setHistoryFiltersOpen(false);
+        setReviewPicker(false);
       }
     };
     window.addEventListener("keydown", key);
@@ -305,7 +336,9 @@ export default function App() {
           ? "Saved on this device. We’ll sync when you’re back online."
           : message,
       );
+      if (a.type !== "review") emitHaptic("success");
       setReviewCategory(null);
+      setReviewSubcategoryId(undefined);
       setReviewPicker(false);
       setStream("salary");
       if (a.type === "review" && a.transactionId) {
@@ -321,6 +354,7 @@ export default function App() {
       return true;
     } catch (e) {
       setNotice((e as Error).message);
+      emitHaptic("error");
       return false;
     } finally {
       actionInFlight.current = false;
@@ -329,7 +363,6 @@ export default function App() {
   function go(p: Page) {
     if (location.hash !== pageHashes[p]) location.hash = pageHashes[p];
     setPage(p);
-    setMenu(false);
     setSearch("");
     setFilter("all");
     setAccountFilter("all");
@@ -351,8 +384,10 @@ export default function App() {
         setState(await flush());
         setNotice("Accounts synced. You’re up to date.");
       }
+      emitHaptic("success");
     } catch (e) {
       setNotice((e as Error).message);
+      emitHaptic("error");
     } finally {
       setBusy(false);
     }
@@ -522,6 +557,16 @@ export default function App() {
       />,
     );
   }
+  const swipePending = s?.transactions.filter(t => t.status === "pending" && !t.bankPending) || [];
+  const swipeCurrent = swipePending.find(t => t.id === reviewId) || swipePending[0];
+  const swipeCategory = reviewCategory || swipeCurrent?.suggested || "spending";
+  const swipeSubcategory = reviewCategory ? reviewSubcategoryId : reviewSubcategoryId || swipeCurrent?.suggestedSubcategoryId;
+  const reviewSwipe = useSwipeCard(swipeCurrent?.id || "", () => swipeCurrent ? act({ type: "review", transactionId: swipeCurrent.id, category: swipeCategory, subcategoryId: swipeSubcategory, incomeStream: swipeCurrent.direction === "in" ? stream : undefined }, "Confirmed. One less thing on your mind.") : false, () => setReviewPicker(true), !reviewCategory && !reviewPicker, reviewPicker);
+  const swipeRecurring = s?.recurring.find(r => !r.dismissed && (!r.confirmed || r.mismatch));
+  const recurringSwipe = useSwipeCard(swipeRecurring?.id || "", () => { const form = document.querySelector<HTMLFormElement>(".recurring-review form"); if (!form?.checkValidity()) { form?.reportValidity(); return false; } form.requestSubmit(); return true; }, () => { if (swipeRecurring) recurringEdit(swipeRecurring); });
+  const reviewSheetDrag = useSheetDrag(reviewPicker, () => setReviewPicker(false));
+  const historySheetDrag = useSheetDrag(historyFiltersOpen, () => setHistoryFiltersOpen(false));
+  useSheetFocus(reviewPicker || historyFiltersOpen);
   if (auth === "loading")
     return (
       <div className="loading">
@@ -568,10 +613,13 @@ export default function App() {
     if (pending.length < 2) return;
     setReviewId(pending[(reviewPosition + 1) % pending.length].id);
     setReviewCategory(null);
+    setReviewSubcategoryId(undefined);
     setReviewPicker(false);
     setStream("salary");
   }
   const selected = reviewCategory || current?.suggested || "spending";
+  const selectedSubcategoryId = reviewCategory ? reviewSubcategoryId : reviewSubcategoryId || current?.suggestedSubcategoryId;
+  const mobileActive: Page = ["Calculators", "Should I buy this", "Categories", "Sorting rules", "Settings"].includes(page) ? "Calculators" : ["Accounts", "Savings goal", "Recurring"].includes(page) ? "Overview" : page;
   const recent = [...s.transactions]
     .filter(
       (t) =>
@@ -587,7 +635,10 @@ export default function App() {
           (filter === "pending" && t.status === "pending") ||
           t.category === filter) &&
         (accountFilter === "all" || t.accountId === accountFilter) &&
-        t.merchant.toLowerCase().includes(search.toLowerCase()),
+        (historyDate === "all time" || t.date.slice(0, 7) === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`) &&
+        (t.merchant.toLowerCase().includes(search.toLowerCase()) ||
+          String(t.amount / 100).includes(search.replace("$", "")) ||
+          (s.accounts.find(a => a.id === t.accountId)?.name || "").toLowerCase().includes(search.toLowerCase())),
     )
     .sort((a, b) => b.date.localeCompare(a.date));
   const net = (t: Transaction) =>
@@ -600,12 +651,21 @@ export default function App() {
       (l) => l.expenseId === t.id || l.creditId === t.id,
     );
     return (
+      <div className="history-item" key={t.id}>
       <div
         className="transaction-row"
-        key={t.id}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expandedTransaction === t.id}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpandedTransaction(expandedTransaction === t.id ? null : t.id);
+          }
+        }}
         onClick={(e) => {
           if (!(e.target as HTMLElement).closest("button"))
-            e.currentTarget.querySelector<HTMLButtonElement>(".tx-more")?.click();
+            setExpandedTransaction(expandedTransaction === t.id ? null : t.id);
         }}
       >
         <Merchant name={t.merchant} />
@@ -613,6 +673,7 @@ export default function App() {
           <strong>{t.merchant}</strong>
           <span>
             {s!.accounts.find((a) => a.id === t.accountId)?.name || "Account"}{" "}
+            · {t.status === "pending" ? "needs review" : t.category ? s!.categories[t.category] : "income"}{" "}
             <span className="mobile-date">· {dateLabel(t.date)}</span>
           </span>
         </div>
@@ -694,6 +755,9 @@ export default function App() {
                       {s!.categories[c]}
                     </button>
                   ))}
+                  {(s!.subcategories || []).map(c => <button key={c.id} className={`category-option ${t.subcategoryId === c.id ? "selected" : ""}`} onClick={async () => {
+                    if (await act({ type: "review", transactionId: t.id, category: c.group, subcategoryId: c.id, incomeStream: t.incomeStream }, "Category updated. We’ll remember this merchant.")) setModal(null);
+                  }}>{c.name}</button>)}
                 </div>
               </div>,
             )
@@ -702,13 +766,21 @@ export default function App() {
           <MoreHorizontal size={18} />
         </button>
       </div>
+      {expandedTransaction === t.id && <div className="history-inline-detail">
+        <p>{dateLabel(t.date).toLowerCase()} · {s!.accounts.find(a => a.id === t.accountId)?.name.toLowerCase() || "account"} · {t.status === "pending" ? "needs review" : "confirmed"}</p>
+        <div>
+          <button onClick={(e) => e.currentTarget.closest(".history-item")?.querySelector<HTMLButtonElement>(".tx-more")?.click()}>change category</button>
+          {t.category && <button onClick={() => act({ type: "review", transactionId: t.id, category: t.category || undefined, incomeStream: t.incomeStream }, "Rule saved for this merchant.")}>always sort like this</button>}
+        </div>
+      </div>}
+      </div>
     );
   }
   return (
-    <div className="app-shell">
+    <div className={`app-shell page-${page.toLowerCase().replace(/[^a-z]+/g, "-").replace(/-$/, "")}`}>
       <aside
-        className={`sidebar ${menu ? "is-open" : ""}`}
-        inert={!!modal || (compact && !menu)}
+        className="sidebar"
+        inert={!!modal || compact}
       >
         <a
           className="brand"
@@ -725,7 +797,7 @@ export default function App() {
         </a>
         <div className="workspace-label">your little money corner</div>
         <nav>
-          {(["Overview", "Should I buy this", "Calculators", "Transactions", "Review inbox"] as Page[]).map((p) => {
+          {(["Overview", "Review inbox", "Transactions", "Accounts", "Savings goal", "Calculators"] as Page[]).map((p) => {
             const Icon = icons[p];
             return (
               <button
@@ -734,7 +806,7 @@ export default function App() {
                 onClick={() => go(p)}
               >
                 <Icon size={19} />
-                {p}
+                {{ Overview: "home", "Review inbox": "review", Transactions: "history", Accounts: "accounts", "Savings goal": "goals", Calculators: "tools" }[p as "Overview" | "Review inbox" | "Transactions" | "Accounts" | "Savings goal" | "Calculators"]}
                 {p === "Review inbox" && count > 0 && (
                   <span className="nav-count">{count}</span>
                 )}
@@ -742,7 +814,7 @@ export default function App() {
             );
           })}
           <div className="nav-divider" />
-          {(["Recurring", "Savings goal", "Accounts"] as Page[]).map((p) => {
+          {(["Recurring", "Should I buy this"] as Page[]).map((p) => {
             const Icon = icons[p];
             return (
               <button
@@ -793,37 +865,7 @@ export default function App() {
           </div>
         </div>
       </aside>
-      {menu && <div className="sidebar-shade" onClick={() => setMenu(false)} />}
-      <div className="main-shell" inert={!!modal || (compact && menu)}>
-        <header className="topbar">
-          <div className="breadcrumb">
-            <button
-              className="icon-button mobile-menu"
-              aria-label="open navigation"
-              onClick={() => setMenu(!menu)}
-            >
-              <Menu size={21} />
-            </button>
-            <span>your workspace</span>
-            <ChevronRight size={14} />
-            <strong>{page}</strong>
-          </div>
-          <div className="topbar-actions">
-            {s.demo && <span className="demo-tag">demo</span>}
-            <span className="private-label">
-              <LockKeyhole size={13} />
-              just for you
-            </span>
-            <button
-              className="notification-button"
-              aria-label="open review notifications"
-              onClick={() => go("Review inbox")}
-            >
-              <Bell size={19} />
-              {count > 0 && <i />}
-            </button>
-          </div>
-        </header>
+      <div className="main-shell" inert={!!modal}>
         {offline && (
           <div className="offline-banner">
             <CloudOff size={16} />
@@ -851,18 +893,24 @@ export default function App() {
                   : page === "Should I buy this"
                     ? "should i buy this?"
                   : page === "Calculators"
-                    ? "calculators"
+                    ? "tools"
+                  : page === "Categories"
+                    ? "categories"
+                  : page === "Sorting rules"
+                    ? "sorting rules"
                   : page === "Review inbox"
                     ? "review"
                     : page === "Savings goal"
-                      ? "savings goal"
+                      ? "goals"
                       : page === "Accounts"
                         ? "accounts"
                         : page === "Recurring"
                           ? "recurring"
+                          : page === "Transactions"
+                            ? "history"
                           : page === "Settings"
                             ? "settings"
-                            : "transactions"}
+                            : "tools"}
               </h1>
               <p>
                 {page === "Overview"
@@ -932,49 +980,36 @@ export default function App() {
                 setFilter(category);
               }}
               onLink={() => linkBank()}
+              onSync={sync}
+              syncing={busy}
             />
           )}
-          {page === "Should I buy this" && <ShouldIBuy state={s} onExplore={() => go("Calculators")} />}
-          {page === "Calculators" && <Calculators state={s} onBuy={() => go("Should I buy this")} />}
+          {page === "Should I buy this" && <ShouldIBuy state={s} onExplore={() => go("Calculators")} onDone={() => go("Calculators")} onSleep={(item, price) => {
+            let saved: { item: string; price: number; date: string }[] = [];
+            try {
+              const stored = JSON.parse(localStorage.getItem("sofar-sleep-list") || "[]");
+              if (Array.isArray(stored)) saved = stored;
+            } catch { /* a damaged local list should not block saving a new item */ }
+            localStorage.setItem("sofar-sleep-list", JSON.stringify([...saved, { item, price, date: new Date().toISOString() }]));
+            setNotice("saved for later. you can find it in tools.");
+            go("Calculators");
+          }} />}
+          {page === "Calculators" && <Calculators state={s} onBuy={() => go("Should I buy this")} onSetup={go} />}
+          {page === "Categories" && <Categories state={s} onBack={() => go("Calculators")} onAction={act} />}
+          {page === "Sorting rules" && <SortingRules state={s} onBack={() => go("Calculators")} onAction={act} />}
           {page === "Transactions" && (
-            <section className="card transaction-page">
+            <section className="transaction-page">
               <div className="table-toolbar">
                 <div className="search-field">
-                  <Search size={17} />
                   <input
                     aria-label="search transactions"
-                    placeholder="find a transaction…"
+                    placeholder="search trader joe's, gas, 54…"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                   />
                 </div>
-                <select
-                  aria-label="filter transactions"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                >
-                  <option value="all">all transactions</option>
-                  {categories.map((c) => (
-                    <option key={c} value={c}>
-                      {s.categories[c]}
-                    </option>
-                  ))}
-                  <option value="pending">needs review</option>
-                </select>
-                <select
-                  aria-label="filter by account"
-                  value={accountFilter}
-                  onChange={(e) => setAccountFilter(e.target.value)}
-                >
-                  <option value="all">all accounts</option>
-                  {s.accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
                 <button
-                  className="button small-button"
+                  className="history-export"
                   onClick={() => {
                     const csv = [
                       "Date,Merchant,Amount,Category,Status",
@@ -1002,13 +1037,18 @@ export default function App() {
                   export
                 </button>
               </div>
-              <div className="table-heading">
-                <span>transaction</span>
-                <span>date</span>
-                <span>category</span>
-                <span>amount</span>
+              <div className="history-chips" role="group" aria-label="transaction categories">
+                {["all", "expenses", "spending", "savings", "pending"] .map((value) => <button key={value} data-h="tick" className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "all" : value === "pending" ? "needs review" : s.categories[value as Category]}</button>)}
               </div>
-              {rows.map(txRow)}
+              <div className="history-filter-buttons">
+                <button data-h="sheet" onClick={() => setHistoryFiltersOpen(true)}>{accountFilter === "all" ? "all accounts" : s.accounts.find(a => a.id === accountFilter)?.name.toLowerCase()} <ChevronDown size={14} /></button>
+                <button data-h="sheet" onClick={() => setHistoryFiltersOpen(true)}>{historyDate} <ChevronDown size={14} /></button>
+              </div>
+              <p className="history-summary">{rows.length} transactions · {money(rows.filter(t => t.direction === "out").reduce((sum, t) => sum + net(t), 0))} out · {money(rows.filter(t => t.direction === "in").reduce((sum, t) => sum + t.amount, 0))} in</p>
+              {Array.from(new Set(rows.map(t => t.date))).map(date => <div className="history-day" key={date}>
+                <h2>{date === new Date().toLocaleDateString("en-CA") ? "today" : date === new Date(Date.now() - 86400000).toLocaleDateString("en-CA") ? "yesterday" : new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }).toLowerCase()}</h2>
+                <div className="history-day-card">{rows.filter(t => t.date === date).map(txRow)}</div>
+              </div>)}
               {!rows.length && (
                 <div className="empty">
                   <Search />
@@ -1016,9 +1056,15 @@ export default function App() {
                   <p>try a different search or filter.</p>
                 </div>
               )}
-              <div className="table-footer">
-                {rows.length} transactions · amounts in usd
-              </div>
+              {historyFiltersOpen && <div className="history-filter-backdrop" data-closing={historySheetDrag.closing} onClick={historySheetDrag.close}><div className="history-filter-sheet" role="dialog" aria-modal="true" aria-label="filter history" data-dragging={historySheetDrag.dragging} style={historySheetDrag.style} {...historySheetDrag.handlers} onClick={event => event.stopPropagation()}>
+                <div className="history-sheet-handle" />
+                <h2>filter</h2>
+                <h3>account</h3>
+                <div className="history-sheet-chips"><button data-h="tick" className={accountFilter === "all" ? "active" : ""} onClick={() => setAccountFilter("all")}>all accounts</button>{s.accounts.map(a => <button key={a.id} data-h="tick" className={accountFilter === a.id ? "active" : ""} onClick={() => setAccountFilter(a.id)}>{a.name.toLowerCase()}</button>)}</div>
+                <h3>when</h3>
+                <div className="history-sheet-chips"><button data-h="tick" className={historyDate === "this month" ? "active" : ""} onClick={() => setHistoryDate("this month")}>this month</button><button data-h="tick" className={historyDate === "all time" ? "active" : ""} onClick={() => setHistoryDate("all time")}>all time</button></div>
+                <div className="history-sheet-actions"><button data-h="soft" onClick={() => { setFilter("all"); setAccountFilter("all"); setHistoryDate("this month"); setSearch(""); }}>clear</button><button data-h="success" onClick={historySheetDrag.close}>show {rows.length}</button></div>
+              </div></div>}
             </section>
           )}
           {page === "Review inbox" && (
@@ -1027,44 +1073,26 @@ export default function App() {
                 {current ? (
                   <>
                     <div className="review-progress">
-                      <span>
-                        transaction {reviewPosition + 1} of {pending.length}
-                      </span>
-                      <span>{pending.length} transactions left</span>
+                      <span>{count} left</span>
+                      <span>transaction {reviewPosition + 1} of {pending.length}</span>
                     </div>
-                    <div
-                      className="review-card card"
-                      onTouchStart={(e) =>
-                        (touch.current = e.touches[0].clientX)
-                      }
-                      onTouchEnd={(e) => {
-                        const delta =
-                          e.changedTouches[0].clientX - touch.current;
-                        if (delta > 90)
-                          act({
-                            type: "review",
-                            transactionId: current.id,
-                            category: selected,
-                            incomeStream:
-                              current.direction === "in" ? stream : undefined,
-                          });
-                        if (delta < -90) setReviewPicker(true);
-                      }}
-                    >
-                      <div className="review-card-meta">
-                        <span>{dateLabel(current.date)}</span>
-                        <span>
-                          {
-                            s.accounts.find((a) => a.id === current.accountId)
-                              ?.name
-                          }
-                        </span>
-                      </div>
+                    <div className="review-progress-track"><span style={{ width: `${((reviewPosition + 1) / Math.max(1, pending.length)) * 100}%` }} /></div>
+                    <div className="review-card-stage" style={reviewSwipe.style}>
+                    <div className="review-drag-tint review-drag-confirm" style={{ opacity: Math.min(.45, Math.max(0, reviewSwipe.x / 70) * .45) }} />
+                    <div className="review-drag-tint review-drag-change" style={{ opacity: Math.min(.5, Math.max(0, -reviewSwipe.x / 70) * .5) }} />
+                    <span className="review-drag-cue review-drag-cue-confirm" aria-hidden="true" style={{ opacity: Math.max(0, Math.min(1, reviewSwipe.x / 70)), transform: `scale(${reviewSwipe.x > 90 ? 1.12 : .8})` }}>confirm ✓</span>
+                    <span className="review-drag-cue review-drag-cue-change" aria-hidden="true" style={{ opacity: Math.max(0, Math.min(1, -reviewSwipe.x / 70)), transform: `scale(${reviewSwipe.x < -90 ? 1.12 : .8})` }}>change ←</span>
+                    <div className="review-card card" data-phase={reviewSwipe.phase} {...reviewSwipe.handlers}>
+                      <div className="review-kind">new transaction</div>
                       <Merchant name={current.merchant} />
                       <h2>{current.merchant}</h2>
                       <div className="review-amount">
                         {current.direction === "in" ? "+" : "−"}
                         {money(current.amount, true)}
+                      </div>
+                      <div className="review-card-meta">
+                        <span>{s.accounts.find((a) => a.id === current.accountId)?.name?.toLowerCase() || "account"} · {s.accounts.find((a) => a.id === current.accountId)?.mask || ""}</span>
+                        <span>· {dateLabel(current.date).toLowerCase()}</span>
                       </div>
                       <p>
                         {current.direction === "in"
@@ -1122,53 +1150,7 @@ export default function App() {
                               </button>
                             ))}
                         </div>
-                      ) : (
-                        <span className={`pill large ${selected}`}>
-                          {s.categories[selected]}
-                        </span>
-                      )}
-                      {reviewPicker && (
-                        <div className="category-options">
-                          {categories.map((c) => (
-                            <button
-                              key={c}
-                              className={`category-option ${selected === c ? "selected" : ""}`}
-                              onClick={() => setReviewCategory(c)}
-                            >
-                              {s.categories[c]}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <div className="review-actions">
-                        <button
-                          className="button"
-                          onClick={() => setReviewPicker(!reviewPicker)}
-                        >
-                          <ArrowLeft size={17} />
-                          change category
-                        </button>
-                        <button
-                          className="button primary"
-                          onClick={() =>
-                            act(
-                              {
-                                type: "review",
-                                transactionId: current.id,
-                                category: selected,
-                                incomeStream:
-                                  current.direction === "in"
-                                    ? stream
-                                    : undefined,
-                              },
-                              "Confirmed. One less thing on your mind.",
-                            )
-                          }
-                        >
-                          <Check size={17} />
-                          confirm
-                        </button>
-                      </div>
+                      ) : <div className="review-suggestion"><span>we think it’s</span><strong>{s.categories[selected]}</strong><small>{(s.subcategories || []).find(c => c.id === selectedSubcategoryId)?.name || "you can change this"}</small></div>}
                       {pending.length > 1 && (
                         <button
                           className="review-skip"
@@ -1183,18 +1165,29 @@ export default function App() {
                         swipe left to change · swipe right to confirm
                       </div>
                     </div>
+                    </div>
+                    <div className="review-actions">
+                      <button className="button" data-h="sheet" onClick={() => setReviewPicker(!reviewPicker)}><ArrowLeft size={17} />change category</button>
+                      <button className="button primary" data-h="success" onClick={() => reviewSwipe.confirm(true)}><Check size={17} />confirm</button>
+                    </div>
+                    {reviewPicker && (
+                      <div className="design-sheet-backdrop" data-closing={reviewSheetDrag.closing} onClick={reviewSheetDrag.close}><div className="design-sheet" role="dialog" aria-modal="true" aria-label="change category" data-dragging={reviewSheetDrag.dragging} style={reviewSheetDrag.style} {...reviewSheetDrag.handlers} onClick={event => event.stopPropagation()}>
+                        <div className="history-sheet-handle" /><div className="design-sheet-title"><h2>change category</h2><button aria-label="close" onClick={reviewSheetDrag.close}><X size={20} /></button></div>
+                        <div className="design-sheet-chips">{categories.map(c => <button key={c} data-h="tick" className={selected === c ? "active" : ""} onClick={() => { setReviewCategory(c); setReviewSubcategoryId(undefined); }}>{s.categories[c]}</button>)}</div>
+                        {(s.subcategories || []).some(c => c.group === selected) && <><span className="design-sheet-label">more specific</span><div className="design-sheet-chips"><button data-h="tick" className={!selectedSubcategoryId ? "active" : ""} onClick={() => setReviewSubcategoryId(undefined)}>just {s.categories[selected]}</button>{(s.subcategories || []).filter(c => c.group === selected).map(c => <button key={c.id} data-h="tick" className={selectedSubcategoryId === c.id ? "active" : ""} onClick={() => setReviewSubcategoryId(c.id)}>{c.name}</button>)}</div></>}
+                        <button className="design-sheet-save" data-h="success" onClick={reviewSheetDrag.close}>use this category</button>
+                      </div></div>
+                    )}
                   </>
                 ) : candidates.length ? (
+                  <div className="review-card-stage" style={recurringSwipe.style}>
+                  <div className="review-drag-tint review-drag-confirm" style={{ opacity: Math.min(.45, Math.max(0, recurringSwipe.x / 70) * .45) }} />
+                  <div className="review-drag-tint review-drag-change" style={{ opacity: Math.min(.5, Math.max(0, -recurringSwipe.x / 70) * .5) }} />
                   <div
                     key={candidates[0].id}
                     className="review-card card recurring-review"
-                    onTouchStart={(e) => (touch.current = e.touches[0].clientX)}
-                    onTouchEnd={(e) => {
-                      const delta = e.changedTouches[0].clientX - touch.current;
-                      if (delta > 90)
-                        e.currentTarget.querySelector("form")?.requestSubmit();
-                      if (delta < -90) recurringEdit(candidates[0]);
-                    }}
+                    data-phase={recurringSwipe.phase}
+                    {...recurringSwipe.handlers}
                   >
                     <div className="review-progress">
                       <span>{candidates.length} recurring items left</span>
@@ -1233,6 +1226,7 @@ export default function App() {
                     <div className="swipe-hint">
                       swipe left to edit · swipe right to confirm
                     </div>
+                  </div>
                   </div>
                 ) : (
                   <div className="card empty">
@@ -1539,6 +1533,14 @@ export default function App() {
               <section className="card settings-card">
                 <h2>your devices & security</h2>
                 <div className="setting-line">
+                  <div><strong>motion</strong><p>springy movement when you tap, swipe, and open a sheet. your device’s reduced-motion setting takes precedence.</p></div>
+                  <select aria-label="motion style" value={motionMode} onChange={event => { const next = event.target.value as MotionMode; setMotionMode(next); localStorage.setItem("sofar-motion", next); }}><option value="expressive">expressive</option><option value="calm">calm</option><option value="off">off</option></select>
+                </div>
+                <div className="setting-line">
+                  <div><strong>touch feedback</strong><p>distinct pulses for presses, choices, swipes, sheets, and confirmations on supported devices. visual ripples show feedback elsewhere.</p></div>
+                  <span className="setting-actions"><button className="button small-button" type="button" data-h="success" disabled={!hapticsEnabled} aria-label="test touch feedback">feel it</button><button className="button small-button" role="switch" aria-checked={hapticsEnabled} data-h="manual" onClick={event => { const next = !hapticsEnabled; setHapticEnabled(true); emitHaptic(next ? "toggle" : "toggleOff", { x: event.clientX, y: event.clientY }); setHapticsEnabled(next); setHapticEnabled(next); localStorage.setItem("sofar-haptics", next ? "on" : "off"); }}>{hapticsEnabled ? "on" : "off"}</button></span>
+                </div>
+                <div className="setting-line">
                   <div>
                     <strong>review reminders</strong>
                     <p>
@@ -1699,22 +1701,21 @@ export default function App() {
           {(
             [
               "Overview",
-              "Transactions",
               "Review inbox",
-              "Recurring",
-              "Accounts",
+              "Transactions",
+              "Calculators",
             ] as Page[]
           ).map((p) => {
             const Icon = icons[p];
             return (
               <button
                 key={p}
-                className={page === p ? "active" : ""}
+                className={mobileActive === p ? "active" : ""}
                 onClick={() => go(p)}
-                aria-current={page === p ? "page" : undefined}
+                aria-current={mobileActive === p ? "page" : undefined}
               >
                 <Icon size={18} />
-                <span>{p === "Review inbox" ? "review" : p}</span>
+                <span>{{ Overview: "home", "Review inbox": "review", Transactions: "history", Calculators: "tools" }[p as "Overview" | "Review inbox" | "Transactions" | "Calculators"]}</span>
                 {p === "Review inbox" && count > 0 && (
                   <span className="tab-count">{count}</span>
                 )}

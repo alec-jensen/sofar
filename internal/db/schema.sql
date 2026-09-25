@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 CREATE TABLE IF NOT EXISTS categories (id text PRIMARY KEY CHECK(id IN ('expenses','spending','savings')), name text NOT NULL, is_savings_category boolean NOT NULL DEFAULT false);
 INSERT INTO categories VALUES ('expenses','expenses',false),('spending','spending',false),('savings','savings',true) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS subcategories (id text PRIMARY KEY, name text NOT NULL, group_id text NOT NULL REFERENCES categories(id), monthly_plan bigint NOT NULL DEFAULT 0 CHECK(monthly_plan>=0));
 CREATE TABLE IF NOT EXISTS recurring_groups (
  id text PRIMARY KEY, merchant_pattern text NOT NULL, expected_amount bigint NOT NULL CHECK(expected_amount>=0), amount_tolerance_pct numeric NOT NULL DEFAULT 10 CHECK(amount_tolerance_pct BETWEEN 0 AND 100),
  cadence text NOT NULL CHECK(cadence IN ('weekly','biweekly','monthly','annual')), type text NOT NULL CHECK(type IN ('bill','income')),
@@ -26,8 +27,11 @@ CREATE TABLE IF NOT EXISTS transactions (
  review_status text NOT NULL DEFAULT 'pending' CHECK(review_status IN ('pending','confirmed')), direction text NOT NULL CHECK(direction IN ('in','out')),
  income_stream text CHECK(income_stream IN ('salary','self-employed','transfer')), bank_pending boolean NOT NULL DEFAULT false
 );
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS subcategory_id text REFERENCES subcategories(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date DESC);
 CREATE TABLE IF NOT EXISTS rules (merchant_pattern text PRIMARY KEY, category_id text NOT NULL REFERENCES categories(id));
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS subcategory_id text REFERENCES subcategories(id) ON DELETE SET NULL;
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
 CREATE TABLE IF NOT EXISTS reimbursement_links (
  id text PRIMARY KEY, expense_transaction_id text NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
  reimbursement_transaction_id text NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,

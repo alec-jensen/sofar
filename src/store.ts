@@ -31,6 +31,17 @@ export async function loadDemo() {
   }
   if (saved.goal.name === "A little breathing room")
     saved.goal.name = "a little breathing room";
+  if (!saved.subcategories) {
+    const fresh = demoState();
+    saved.subcategories = fresh.subcategories;
+    for (const transaction of saved.transactions) {
+      const example = fresh.transactions.find(t => t.id === transaction.id);
+      if (example) {
+        transaction.subcategoryId = example.subcategoryId;
+        transaction.suggestedSubcategoryId = example.suggestedSubcategoryId;
+      }
+    }
+  }
   if (!saved.recurring.some((r) => r.id === "demo-candidate")) {
     saved.recurring.push(demoState().recurring[0]);
   }

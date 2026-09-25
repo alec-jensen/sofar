@@ -10,6 +10,8 @@ export type Transaction = {
   direction: "in" | "out";
   incomeStream?: "salary" | "self-employed" | "transfer";
   suggested?: Category;
+  subcategoryId?: string;
+  suggestedSubcategoryId?: string;
   recurringId?: string;
   bankPending?: boolean;
 };
@@ -38,11 +40,13 @@ export type Recurring = {
   nextDate: string;
   mismatch?: boolean;
 };
+export type Subcategory = { id: string; name: string; group: Category; monthlyPlan: number };
 export type State = {
   transactions: Transaction[];
   accounts: Account[];
   recurring: Recurring[];
-  rules: { pattern: string; category: Category }[];
+  rules: { pattern: string; category: Category; subcategoryId?: string; enabled?: boolean }[];
+  subcategories?: Subcategory[];
   links: { id: string; expenseId: string; creditId: string; amount: number }[];
   goal: { name: string; target: number; monthly: number; saved: number };
   categories: Record<Category, string>;
@@ -65,6 +69,11 @@ export type Action = {
   goal?: State["goal"];
   threshold?: number;
   categories?: State["categories"];
+  subcategory?: Subcategory;
+  subcategoryId?: string;
+  pattern?: string;
+  oldPattern?: string;
+  enabled?: boolean;
 };
 export const money = (c: number, decimals = false) =>
   new Intl.NumberFormat("en-US", {
@@ -121,6 +130,8 @@ export function budget(s: State, now = new Date()) {
         ),
       0,
     );
+  const plannedExpenses = (s.subcategories || []).filter(c => c.group === "expenses").reduce((n, c) => n + c.monthlyPlan, 0);
+  const plannedSavings = (s.subcategories || []).filter(c => c.group === "savings").reduce((n, c) => n + c.monthlyPlan, 0);
   const totals = { expenses: 0, spending: 0, savings: 0 };
   for (const t of s.transactions) {
     if (
@@ -142,7 +153,9 @@ export function budget(s: State, now = new Date()) {
     selfEmployed,
     income: salary + selfEmployed,
     bills,
-    safe: salary + selfEmployed - bills - s.goal.monthly,
+    safe: salary + selfEmployed - Math.max(bills, plannedExpenses) - Math.max(s.goal.monthly, plannedSavings),
+    plannedExpenses,
+    plannedSavings,
     totals,
     start,
     end,
@@ -193,11 +206,12 @@ export function applyAction(state: State, a: Action): State {
   if (a.type === "review" && t) {
     if (!a.category) throw new Error("Choose a category.");
     t.category = a.category;
+    t.subcategoryId = a.subcategoryId;
     t.status = "confirmed";
     t.incomeStream = a.incomeStream as Transaction["incomeStream"];
     const pattern = normalize(t.merchant);
     s.rules = s.rules.filter((r) => r.pattern !== pattern);
-    s.rules.push({ pattern, category: a.category });
+    s.rules.push({ pattern, category: a.category, subcategoryId: a.subcategoryId, enabled: true });
   }
   if (a.type === "reimburse") {
     const e = s.transactions.find((t) => t.id === a.expenseId),
@@ -265,6 +279,30 @@ export function applyAction(state: State, a: Action): State {
     if (a.threshold) s.threshold = a.threshold;
     if (a.categories) s.categories = a.categories;
   }
+  if (a.type === "subcategory-upsert" && a.subcategory) {
+    const subcategories = s.subcategories || (s.subcategories = []);
+    const index = subcategories.findIndex(x => x.id === a.subcategory!.id);
+    if (index >= 0 && subcategories[index].group !== a.subcategory.group) {
+      for (const tx of s.transactions) if (tx.subcategoryId === a.subcategory.id) tx.category = a.subcategory.group;
+      for (const rule of s.rules) if (rule.subcategoryId === a.subcategory.id) rule.category = a.subcategory.group;
+    }
+    if (index >= 0) subcategories[index] = a.subcategory;
+    else subcategories.push(a.subcategory);
+  }
+  if (a.type === "subcategory-delete" && a.subcategoryId) {
+    s.subcategories = (s.subcategories || []).filter(x => x.id !== a.subcategoryId);
+    for (const tx of s.transactions) if (tx.subcategoryId === a.subcategoryId) tx.subcategoryId = undefined;
+    for (const r of s.rules) if (r.subcategoryId === a.subcategoryId) r.subcategoryId = undefined;
+  }
+  if (a.type === "rule-upsert" && a.pattern && a.category) {
+    s.rules = s.rules.filter(r => r.pattern !== (a.oldPattern || a.pattern) && r.pattern !== a.pattern);
+    s.rules.push({ pattern: a.pattern, category: a.category, subcategoryId: a.subcategoryId, enabled: true });
+  }
+  if (a.type === "rule-delete" && a.pattern) s.rules = s.rules.filter(r => r.pattern !== a.pattern);
+  if (a.type === "rule-toggle" && a.pattern) {
+    const rule = s.rules.find(r => r.pattern === a.pattern);
+    if (rule) rule.enabled = !!a.enabled;
+  }
   s.goal.saved += savedTotal(s) - previousSaved;
   return s;
 }
@@ -315,6 +353,7 @@ export function demoState(): State {
       amount,
       merchant,
       category,
+      subcategoryId: merchant.includes("Rent") ? "rent" : merchant.includes("Internet") ? "utilities" : merchant.includes("Spotify") ? "subscriptions" : merchant.includes("Whole Foods") || merchant.includes("Trader Joe") ? "groceries" : merchant.includes("Coffee") || merchant.includes("Dinner") ? "food-out" : merchant.includes("fund") ? "future" : "other",
       status: "confirmed",
       direction: "out",
     }),
@@ -334,6 +373,7 @@ export function demoState(): State {
       merchant: String(merchant),
       category: null,
       suggested: category as Category,
+      suggestedSubcategoryId: String(merchant).includes("NETFLIX") || String(merchant).includes("Figma") ? "subscriptions" : String(merchant).includes("Sweetgreen") ? "food-out" : undefined,
       status: "pending",
       direction: i === 2 ? "in" : "out",
     }),
@@ -349,6 +389,15 @@ export function demoState(): State {
     },
     threshold: 3,
     rules: [],
+    subcategories: [
+      { id: "rent", name: "rent", group: "expenses", monthlyPlan: 165000 },
+      { id: "utilities", name: "utilities", group: "expenses", monthlyPlan: 25000 },
+      { id: "subscriptions", name: "subscriptions", group: "expenses", monthlyPlan: 5000 },
+      { id: "groceries", name: "groceries", group: "spending", monthlyPlan: 50000 },
+      { id: "food-out", name: "food out", group: "spending", monthlyPlan: 20000 },
+      { id: "other", name: "other", group: "spending", monthlyPlan: 30000 },
+      { id: "future", name: "future", group: "savings", monthlyPlan: 60000 },
+    ],
     links: [],
     goal: {
       name: "a little breathing room",

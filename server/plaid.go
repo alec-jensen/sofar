@@ -350,7 +350,7 @@ func (s *server) syncItem(ctx context.Context, it plaidItem) error {
 				return e
 			}
 		}
-		_, e = tx.ExecContext(ctx, `INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,bank_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET date=$3,amount=$4,raw_merchant=$5,clean_merchant=$6,direction=$7,bank_pending=$8,review_status=CASE WHEN $9 THEN 'pending' ELSE transactions.review_status END,category_id=CASE WHEN $9 THEN NULL ELSE transactions.category_id END,income_stream=CASE WHEN $9 THEN NULL ELSE transactions.income_stream END`, t.ID, t.AccountID, t.Date, amount, merchant, budget.Normalize(merchant), direction, t.Pending, changed)
+		_, e = tx.ExecContext(ctx, `INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,bank_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET date=$3,amount=$4,raw_merchant=$5,clean_merchant=$6,direction=$7,bank_pending=$8,review_status=CASE WHEN $9 THEN 'pending' ELSE transactions.review_status END,category_id=CASE WHEN $9 THEN NULL ELSE transactions.category_id END,subcategory_id=CASE WHEN $9 THEN NULL ELSE transactions.subcategory_id END,income_stream=CASE WHEN $9 THEN NULL ELSE transactions.income_stream END`, t.ID, t.AccountID, t.Date, amount, merchant, budget.Normalize(merchant), direction, t.Pending, changed)
 		if e != nil {
 			return e
 		}
@@ -366,7 +366,7 @@ func (s *server) syncItem(ctx context.Context, it plaidItem) error {
 	return tx.Commit()
 }
 func unlinkForTransaction(ctx context.Context, tx *sql.Tx, id string) error {
-	if _, e := tx.ExecContext(ctx, "UPDATE transactions SET review_status='pending',category_id=NULL,income_stream=NULL WHERE id IN (SELECT reimbursement_transaction_id FROM reimbursement_links WHERE expense_transaction_id=$1 OR reimbursement_transaction_id=$1)", id); e != nil {
+	if _, e := tx.ExecContext(ctx, "UPDATE transactions SET review_status='pending',category_id=NULL,subcategory_id=NULL,income_stream=NULL WHERE id IN (SELECT reimbursement_transaction_id FROM reimbursement_links WHERE expense_transaction_id=$1 OR reimbursement_transaction_id=$1)", id); e != nil {
 		return e
 	}
 	_, e := tx.ExecContext(ctx, "DELETE FROM reimbursement_links WHERE expense_transaction_id=$1 OR reimbursement_transaction_id=$1", id)

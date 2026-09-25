@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"database/sql"
 	"encoding/json"
 	"github.com/alec-jensen/sofar/internal/db"
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
@@ -94,6 +95,25 @@ func TestFullFlow(t *testing.T) {
 	call("/api/actions", `{"id":"offline-action-004","type":"review","transactionId":"credit","category":"spending","incomeStream":"self-employed"}`, 200)
 	call("/api/actions", `{"id":"offline-action-005","type":"settings","threshold":3,"categories":{"expenses":"Bills","spending":"Everyday","savings":"Future"}}`, 200)
 	call("/api/actions", `{"id":"offline-action-006","type":"goal","goal":{"name":"Buffer","target":100000,"monthly":1000,"saved":999999}}`, 200)
+	call("/api/actions", `{"id":"offline-action-010","type":"subcategory-upsert","subcategory":{"id":"food-out","name":"food out","group":"spending","monthlyPlan":12000}}`, 200)
+	call("/api/actions", `{"id":"offline-action-011","type":"review","transactionId":"expense","category":"spending","subcategoryId":"food-out"}`, 200)
+	call("/api/actions", `{"id":"offline-action-012","type":"subcategory-upsert","subcategory":{"id":"food-out","name":"dining","group":"expenses","monthlyPlan":12000}}`, 200)
+	var movedGroup string
+	if e = database.QueryRow("SELECT category_id FROM transactions WHERE id='expense'").Scan(&movedGroup); e != nil || movedGroup != "expenses" {
+		t.Fatal("moving a category must move assigned transactions", e, movedGroup)
+	}
+	call("/api/actions", `{"id":"offline-action-013","type":"rule-upsert","pattern":"coffee","category":"spending"}`, 200)
+	call("/api/actions", `{"id":"offline-action-014","type":"rule-toggle","pattern":"coffee","enabled":false}`, 200)
+	var enabled bool
+	if e = database.QueryRow("SELECT enabled FROM rules WHERE merchant_pattern='coffee'").Scan(&enabled); e != nil || enabled {
+		t.Fatal("rule toggle must persist", e, enabled)
+	}
+	call("/api/actions", `{"id":"offline-action-015","type":"rule-delete","pattern":"coffee"}`, 200)
+	call("/api/actions", `{"id":"offline-action-016","type":"subcategory-delete","subcategoryId":"food-out"}`, 200)
+	var assigned sql.NullString
+	if e = database.QueryRow("SELECT subcategory_id FROM transactions WHERE id='expense'").Scan(&assigned); e != nil || assigned.Valid {
+		t.Fatal("deleting a category must leave transactions unassigned", e, assigned)
+	}
 	// Provider fixtures exercise real pagination and SQL writes without a bank connection.
 	t.Setenv("PLAID_CLIENT_ID", "fixture")
 	t.Setenv("PLAID_SECRET", "fixture")

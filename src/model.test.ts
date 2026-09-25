@@ -128,4 +128,26 @@ describe("money rules", () => {
     });
     expect(restored.recurring.at(-1)?.dismissed).toBe(false);
   });
+  it("reserves expense plans above detected bills and keeps category moves consistent", () => {
+    const s = demoState();
+    const prior = budget(s).safe;
+    const rent = s.subcategories!.find(c => c.id === "rent")!;
+    const planned = applyAction(s, { id: "plan", type: "subcategory-upsert", subcategory: { ...rent, monthlyPlan: 300000 } });
+    expect(budget(planned).safe).toBeLessThan(prior);
+    const moved = applyAction(planned, { id: "move", type: "subcategory-upsert", subcategory: { ...rent, group: "spending" } });
+    expect(moved.transactions.find(t => t.id === "t4")?.category).toBe("spending");
+    const deleted = applyAction(moved, { id: "delete", type: "subcategory-delete", subcategoryId: rent.id });
+    expect(deleted.transactions.find(t => t.id === "t4")?.subcategoryId).toBeUndefined();
+  });
+  it("can pause, edit, and delete sorting rules", () => {
+    const s = demoState();
+    const added = applyAction(s, { id: "rule1", type: "rule-upsert", pattern: "trader joe", category: "spending", subcategoryId: "groceries" });
+    expect(added.rules[0].subcategoryId).toBe("groceries");
+    const paused = applyAction(added, { id: "rule2", type: "rule-toggle", pattern: "trader joe", enabled: false });
+    expect(paused.rules[0].enabled).toBe(false);
+    const renamed = applyAction(paused, { id: "rule3", type: "rule-upsert", oldPattern: "trader joe", pattern: "trader", category: "expenses" });
+    expect(renamed.rules.map(r => r.pattern)).toEqual(["trader"]);
+    const removed = applyAction(renamed, { id: "rule4", type: "rule-delete", pattern: "trader" });
+    expect(removed.rules).toHaveLength(0);
+  });
 });

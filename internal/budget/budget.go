@@ -8,18 +8,20 @@ import (
 )
 
 type Transaction struct {
-	ID           string  `json:"id"`
-	AccountID    string  `json:"accountId"`
-	Date         string  `json:"date"`
-	Amount       int64   `json:"amount"`
-	Merchant     string  `json:"merchant"`
-	Category     *string `json:"category"`
-	Status       string  `json:"status"`
-	Direction    string  `json:"direction"`
-	IncomeStream string  `json:"incomeStream,omitempty"`
-	Suggested    string  `json:"suggested,omitempty"`
-	RecurringID  string  `json:"recurringId,omitempty"`
-	BankPending  bool    `json:"bankPending,omitempty"`
+	ID                     string  `json:"id"`
+	AccountID              string  `json:"accountId"`
+	Date                   string  `json:"date"`
+	Amount                 int64   `json:"amount"`
+	Merchant               string  `json:"merchant"`
+	Category               *string `json:"category"`
+	Status                 string  `json:"status"`
+	Direction              string  `json:"direction"`
+	IncomeStream           string  `json:"incomeStream,omitempty"`
+	Suggested              string  `json:"suggested,omitempty"`
+	SubcategoryID          string  `json:"subcategoryId,omitempty"`
+	SuggestedSubcategoryID string  `json:"suggestedSubcategoryId,omitempty"`
+	RecurringID            string  `json:"recurringId,omitempty"`
+	BankPending            bool    `json:"bankPending,omitempty"`
 }
 type Recurring struct {
 	ID           string  `json:"id"`
