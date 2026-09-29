@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Plus, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, Plus, X } from "lucide-react";
 import { budget, money, type Action, type Category, type State, type Subcategory } from "./model";
 import { useSheetFocus } from "./useSheetFocus";
 import { useSheetDrag } from "./useSheetDrag";
 
 const groups: Category[] = ["expenses", "spending", "savings"];
 
-export default function Categories({ state, onBack, onAction }: { state: State; onBack: () => void; onAction: (action: Omit<Action, "id">, message?: string) => Promise<boolean> }) {
+export default function Categories({ state, onBack, onAction, onRules }: { state: State; onBack: () => void; onAction: (action: Omit<Action, "id">, message?: string) => Promise<boolean>; onRules: () => void }) {
   const [edit, setEdit] = useState<Subcategory | null>(null);
   const [deleteStep, setDeleteStep] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -67,6 +67,12 @@ export default function Categories({ state, onBack, onAction }: { state: State; 
       <span className="design-sheet-label">group</span><div className="design-sheet-chips">{groups.map(group => <button key={group} data-h="tick" className={edit.group === group ? "active" : ""} onClick={() => setEdit({ ...edit, group })}>{state.categories[group]}</button>)}</div>
       <label className="design-sheet-field">monthly plan<input type="number" inputMode="decimal" min="0" max="100000000" step="0.01" value={edit.monthlyPlan / 100} onChange={event => setEdit({ ...edit, monthlyPlan: Math.max(0, Math.round((Number(event.target.value) || 0) * 100)) })} /></label>
       <p className="design-sheet-help">moving a category also moves its assigned transactions and sorting rules to that group.</p>
+      {subcategories.some(c => c.id === edit.id) && (
+        <button type="button" className="design-category-rules-link" onClick={onRules}>
+          <span>→ {state.rules.filter(r => r.subcategoryId === edit.id).length} rules for this category</span>
+          <ChevronRight size={16} />
+        </button>
+      )}
       <button className="design-sheet-save" data-h="success" disabled={saving || !edit.name.trim()} onClick={save}>{saving ? "saving…" : "save category"}</button>
       {subcategories.some(c => c.id === edit.id) && <div className="design-delete-area">{deleteStep ? <><p>delete “{edit.name}”? transactions will keep their group, but lose this category. this can’t be undone.</p><div><button onClick={() => setDeleteStep(false)}>keep it</button><button data-h="thud" disabled={saving} onClick={remove}>yes, delete</button></div></> : <button data-h="soft" onClick={() => setDeleteStep(true)}>delete category</button>}</div>}
     </div></div>}

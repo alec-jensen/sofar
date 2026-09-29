@@ -14,6 +14,10 @@ export type Transaction = {
   suggestedSubcategoryId?: string;
   recurringId?: string;
   bankPending?: boolean;
+  note?: string;
+  ignored?: boolean;
+  ignoreReason?: string;
+  splits?: { category: Category; subcategoryId?: string; amount: number }[];
 };
 export type Account = {
   id: string;
@@ -24,6 +28,8 @@ export type Account = {
   mask: string;
   balance: number;
   syncedAt: string;
+  excludedFromSafeToSpend?: boolean;
+  needsReauth?: boolean;
 };
 export type Recurring = {
   id: string;
@@ -53,6 +59,7 @@ export type State = {
   threshold: number;
   lastSync: string;
   demo: boolean;
+  ignoreRules: { pattern: string }[];
 };
 export type Action = {
   id: string;
@@ -74,6 +81,15 @@ export type Action = {
   pattern?: string;
   oldPattern?: string;
   enabled?: boolean;
+  note?: string;
+  reason?: string;
+  always?: boolean;
+  splits?: Transaction["splits"];
+  accountId?: string;
+  excluded?: boolean;
+  clearReauth?: boolean;
+  fromAccountId?: string;
+  date?: string;
 };
 export const money = (c: number, decimals = false) =>
   new Intl.NumberFormat("en-US", {
@@ -97,6 +113,9 @@ export const normalize = (s: string) =>
 export function budget(s: State, now = new Date()) {
   const end = new Date(now.getFullYear(), now.getMonth(), 1);
   const start = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+  const excludedAccounts = new Set(
+    s.accounts.filter((a) => a.excludedFromSafeToSpend).map((a) => a.id),
+  );
   let salary = 0,
     selfEmployed = 0;
   for (const t of s.transactions) {
@@ -104,9 +123,11 @@ export function budget(s: State, now = new Date()) {
     if (
       t.status !== "confirmed" ||
       t.bankPending ||
+      t.ignored ||
       t.direction !== "in" ||
       d < start ||
       d >= end ||
+      excludedAccounts.has(t.accountId) ||
       s.links.some((l) => l.creditId === t.id)
     )
       continue;
@@ -136,13 +157,19 @@ export function budget(s: State, now = new Date()) {
   for (const t of s.transactions) {
     if (
       t.status !== "confirmed" ||
-      !t.category ||
+      t.ignored ||
+      (!t.category && !t.splits) ||
       t.direction !== "out" ||
+      excludedAccounts.has(t.accountId) ||
       t.date.slice(0, 7) !==
         `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
     )
       continue;
-    totals[t.category] +=
+    if (t.splits) {
+      for (const split of t.splits) totals[split.category] += split.amount;
+      continue;
+    }
+    totals[t.category!] +=
       t.amount -
       s.links
         .filter((l) => l.expenseId === t.id)
@@ -188,18 +215,25 @@ export function applyAction(state: State, a: Action): State {
     s.transactions
       .filter(
         (t) =>
-          t.category === "savings" &&
           t.status === "confirmed" &&
           t.direction === "out" &&
-          !t.bankPending,
+          !t.bankPending &&
+          !t.ignored &&
+          (t.splits
+            ? t.splits.some((sp) => sp.category === "savings")
+            : t.category === "savings"),
       )
       .reduce(
         (sum, t) =>
           sum +
-          t.amount -
-          s.links
-            .filter((l) => l.expenseId === t.id)
-            .reduce((n, l) => n + l.amount, 0),
+          (t.splits
+            ? t.splits
+                .filter((sp) => sp.category === "savings")
+                .reduce((n, sp) => n + sp.amount, 0)
+            : t.amount -
+              s.links
+                .filter((l) => l.expenseId === t.id)
+                .reduce((n, l) => n + l.amount, 0)),
         0,
       );
   const previousSaved = savedTotal(s);
@@ -209,6 +243,9 @@ export function applyAction(state: State, a: Action): State {
     t.subcategoryId = a.subcategoryId;
     t.status = "confirmed";
     t.incomeStream = a.incomeStream as Transaction["incomeStream"];
+    t.ignored = false;
+    t.ignoreReason = undefined;
+    t.splits = undefined;
     const pattern = normalize(t.merchant);
     s.rules = s.rules.filter((r) => r.pattern !== pattern);
     s.rules.push({ pattern, category: a.category, subcategoryId: a.subcategoryId, enabled: true });
@@ -298,10 +335,63 @@ export function applyAction(state: State, a: Action): State {
     s.rules = s.rules.filter(r => r.pattern !== (a.oldPattern || a.pattern) && r.pattern !== a.pattern);
     s.rules.push({ pattern: a.pattern, category: a.category, subcategoryId: a.subcategoryId, enabled: true });
   }
+  if (a.type === "rule-backfill" && a.pattern && a.category) {
+    for (const tx of s.transactions) {
+      if (tx.status === "confirmed" && !tx.ignored && !tx.splits && normalize(tx.merchant).includes(a.pattern)) {
+        tx.category = a.category;
+        tx.subcategoryId = a.subcategoryId;
+      }
+    }
+  }
   if (a.type === "rule-delete" && a.pattern) s.rules = s.rules.filter(r => r.pattern !== a.pattern);
   if (a.type === "rule-toggle" && a.pattern) {
     const rule = s.rules.find(r => r.pattern === a.pattern);
     if (rule) rule.enabled = !!a.enabled;
+  }
+  if (a.type === "ignore" && t) {
+    t.status = "confirmed";
+    t.ignored = true;
+    t.ignoreReason = a.reason;
+    t.category = null;
+    if (a.always) {
+      const pattern = normalize(t.merchant);
+      if (!s.ignoreRules.some((r) => r.pattern === pattern))
+        s.ignoreRules.push({ pattern });
+    }
+  }
+  if (a.type === "split" && t && a.splits) {
+    if (
+      a.splits.length < 2 ||
+      a.splits.some((sp) => sp.amount <= 0) ||
+      a.splits.reduce((n, sp) => n + sp.amount, 0) !== t.amount
+    )
+      throw new Error("Splits must add up to the full amount.");
+    t.splits = a.splits;
+    t.category = null;
+    t.status = "confirmed";
+    t.ignored = false;
+  }
+  if (a.type === "note" && t) t.note = a.note;
+  if (a.type === "add-savings") {
+    if (!a.amount || a.amount <= 0 || !a.fromAccountId)
+      throw new Error("Choose an amount and an account.");
+    s.transactions.push({
+      id: a.id,
+      accountId: a.fromAccountId,
+      date: a.date || new Date().toISOString().slice(0, 10),
+      amount: a.amount,
+      merchant: a.note || "added to savings",
+      category: "savings",
+      status: "confirmed",
+      direction: "out",
+    });
+  }
+  if (a.type === "account-settings" && a.accountId) {
+    const account = s.accounts.find((acc) => acc.id === a.accountId);
+    if (account) {
+      if (a.excluded !== undefined) account.excludedFromSafeToSpend = a.excluded;
+      if (a.clearReauth) account.needsReauth = false;
+    }
   }
   s.goal.saved += savedTotal(s) - previousSaved;
   return s;
@@ -389,6 +479,7 @@ export function demoState(): State {
     },
     threshold: 3,
     rules: [],
+    ignoreRules: [],
     subcategories: [
       { id: "rent", name: "rent", group: "expenses", monthlyPlan: 165000 },
       { id: "utilities", name: "utilities", group: "expenses", monthlyPlan: 25000 },
@@ -435,6 +526,7 @@ export function demoState(): State {
         mask: "1106",
         balance: 2432850,
         syncedAt: now.toISOString(),
+        needsReauth: true,
       },
     ],
     recurring: [

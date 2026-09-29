@@ -1,4 +1,5 @@
 import Dashboard from "./Dashboard";
+import Onboarding from "./Onboarding";
 import ShouldIBuy from "./ShouldIBuy";
 import Calculators from "./Calculators";
 import Categories from "./Categories";
@@ -176,7 +177,22 @@ export default function App() {
     [reviewSubcategoryId, setReviewSubcategoryId] = useState<string | undefined>(undefined),
     [stream, setStream] = useState("salary"),
     [reviewPicker, setReviewPicker] = useState(false),
-    [reviewId, setReviewId] = useState("");
+    [reviewId, setReviewId] = useState(""),
+    [ignoreSheet, setIgnoreSheet] = useState(false),
+    [ignoreReason, setIgnoreReason] = useState(""),
+    [ignoreAlways, setIgnoreAlways] = useState(false),
+    [splitSheet, setSplitSheet] = useState(false),
+    [splitAmounts, setSplitAmounts] = useState<Record<Category, number>>({ expenses: 0, spending: 0, savings: 0 }),
+    [depositSheet, setDepositSheet] = useState(false),
+    [depositAmount, setDepositAmount] = useState(2500),
+    [depositAccountId, setDepositAccountId] = useState(""),
+    [linkSheet, setLinkSheet] = useState(false),
+    [expandedAccount, setExpandedAccount] = useState<string | null>(null),
+    [activeTxId, setActiveTxId] = useState(""),
+    [onboarding, setOnboarding] = useState(false);
+  useEffect(() => {
+    if (auth === "ready" && !localStorage.getItem("sofar-onboarded")) setOnboarding(true);
+  }, [auth]);
   const actionInFlight = useRef(false);
   const liveState = useRef(s);
   liveState.current = s;
@@ -566,7 +582,11 @@ export default function App() {
   const recurringSwipe = useSwipeCard(swipeRecurring?.id || "", () => { const form = document.querySelector<HTMLFormElement>(".recurring-review form"); if (!form?.checkValidity()) { form?.reportValidity(); return false; } form.requestSubmit(); return true; }, () => { if (swipeRecurring) recurringEdit(swipeRecurring); });
   const reviewSheetDrag = useSheetDrag(reviewPicker, () => setReviewPicker(false));
   const historySheetDrag = useSheetDrag(historyFiltersOpen, () => setHistoryFiltersOpen(false));
-  useSheetFocus(reviewPicker || historyFiltersOpen);
+  const ignoreSheetDrag = useSheetDrag(ignoreSheet, () => setIgnoreSheet(false));
+  const splitSheetDrag = useSheetDrag(splitSheet, () => setSplitSheet(false));
+  const depositSheetDrag = useSheetDrag(depositSheet, () => setDepositSheet(false));
+  const linkSheetDrag = useSheetDrag(linkSheet, () => setLinkSheet(false));
+  useSheetFocus(reviewPicker || historyFiltersOpen || ignoreSheet || splitSheet || depositSheet || linkSheet);
   if (auth === "loading")
     return (
       <div className="loading">
@@ -596,6 +616,18 @@ export default function App() {
           }}
         />
       </div>
+    );
+  if (onboarding)
+    return (
+      <Onboarding
+        state={s}
+        onAction={act}
+        onLinkBank={() => linkBank()}
+        onDone={() => {
+          localStorage.setItem("sofar-onboarded", "1");
+          setOnboarding(false);
+        }}
+      />
     );
   const period = new Date();
   period.setMonth(period.getMonth() + monthOffset, 1);
@@ -628,6 +660,29 @@ export default function App() {
           `${period.getFullYear()}-${String(period.getMonth() + 1).padStart(2, "0")}`,
     )
     .sort((a, b) => b.date.localeCompare(a.date));
+  const activeTx = s.transactions.find((t) => t.id === activeTxId) || null;
+  const savingsAmount = (t: Transaction) =>
+    t.splits
+      ? t.splits.filter((sp) => sp.category === "savings").reduce((n, sp) => n + sp.amount, 0)
+      : t.category === "savings"
+        ? t.amount - s.links.filter((l) => l.expenseId === t.id).reduce((n, l) => n + l.amount, 0)
+        : 0;
+  const savingsDeposits = s.transactions
+    .filter((t) => t.status === "confirmed" && t.direction === "out" && !t.bankPending && !t.ignored && savingsAmount(t) > 0)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const savingsByMonth = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - (5 - i), 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    return {
+      key,
+      label: d.toLocaleDateString("en-US", { month: "short" }),
+      total: savingsDeposits
+        .filter((t) => t.date.slice(0, 7) === key)
+        .reduce((n, t) => n + savingsAmount(t), 0),
+    };
+  });
+  const savingsMonthMax = Math.max(1, ...savingsByMonth.map((m) => m.total));
   const rows = s.transactions
     .filter(
       (t) =>
@@ -673,27 +728,31 @@ export default function App() {
           <strong>{t.merchant}</strong>
           <span>
             {s!.accounts.find((a) => a.id === t.accountId)?.name || "Account"}{" "}
-            · {t.status === "pending" ? "needs review" : t.category ? s!.categories[t.category] : "income"}{" "}
+            · {t.status === "pending" ? "needs review" : t.ignored ? "ignored" : t.splits ? "split" : t.category ? s!.categories[t.category] : "income"}{" "}
             <span className="mobile-date">· {dateLabel(t.date)}</span>
           </span>
         </div>
         <span className="tx-date">{dateLabel(t.date)}</span>
         <span
-          className={`pill ${t.status === "pending" ? "pending" : t.incomeStream ? "income" : t.category || ""}`}
+          className={`pill ${t.status === "pending" ? "pending" : t.ignored ? "pending" : t.splits ? "spending" : t.incomeStream ? "income" : t.category || ""}`}
         >
           {t.status === "pending"
             ? "Needs review"
-            : t.incomeStream === "salary"
-              ? "Salary"
-              : t.incomeStream === "self-employed"
-                ? "Self-employed"
-                : t.incomeStream === "transfer"
-                  ? "Transfer"
-                  : link
-                    ? "Reimbursed"
-                    : t.category
-                      ? s!.categories[t.category]
-                      : "Transfer"}
+            : t.ignored
+              ? "Ignored"
+              : t.splits
+                ? "Split"
+                : t.incomeStream === "salary"
+                  ? "Salary"
+                  : t.incomeStream === "self-employed"
+                    ? "Self-employed"
+                    : t.incomeStream === "transfer"
+                      ? "Transfer"
+                      : link
+                        ? "Reimbursed"
+                        : t.category
+                          ? s!.categories[t.category]
+                          : "Transfer"}
         </span>
         <strong
           className={`tx-amount ${t.direction === "in" ? "positive" : ""}`}
@@ -704,7 +763,7 @@ export default function App() {
         <button
           className="icon-button tx-more"
           aria-label={`Details for ${t.merchant}`}
-          onClick={() =>
+          onClick={() => {
             setModal(
               <div>
                 <Merchant name={t.merchant} />
@@ -714,6 +773,21 @@ export default function App() {
                   {s!.accounts.find((a) => a.id === t.accountId)?.name}
                 </p>
                 <div className="detail-amount">{money(t.amount, true)}</div>
+                {t.ignored && (
+                  <p className="detail-ignored">
+                    ignored{t.ignoreReason ? ` · ${t.ignoreReason}` : ""}. it doesn’t count toward your budget.
+                  </p>
+                )}
+                {t.splits && (
+                  <div className="split-rows">
+                    {t.splits.map((sp, i) => (
+                      <div className="split-row" key={i}>
+                        <span>{s!.categories[sp.category]}</span>
+                        <strong>{money(sp.amount, true)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {link ? (
                   <>
                     <p>{money(link.amount, true)} linked as a repayment.</p>
@@ -734,34 +808,52 @@ export default function App() {
                     link as a repayment
                   </button>
                 ) : null}
-                <p className="field-label">category</p>
-                <div className="category-options">
-                  {categories.map((c) => (
-                    <button
-                      key={c}
-                      className={`category-option ${t.category === c ? "selected" : ""}`}
-                      onClick={async () => {
-                        if (await act(
-                          {
-                            type: "review",
-                            transactionId: t.id,
-                            category: c,
-                            incomeStream: t.incomeStream,
-                          },
-                          "Category updated. We’ll remember this merchant.",
-                        )) setModal(null);
-                      }}
-                    >
-                      {s!.categories[c]}
-                    </button>
-                  ))}
-                  {(s!.subcategories || []).map(c => <button key={c.id} className={`category-option ${t.subcategoryId === c.id ? "selected" : ""}`} onClick={async () => {
-                    if (await act({ type: "review", transactionId: t.id, category: c.group, subcategoryId: c.id, incomeStream: t.incomeStream }, "Category updated. We’ll remember this merchant.")) setModal(null);
-                  }}>{c.name}</button>)}
+                {!t.splits && (
+                  <>
+                    <p className="field-label">category</p>
+                    <div className="category-options">
+                      {categories.map((c) => (
+                        <button
+                          key={c}
+                          className={`category-option ${t.category === c ? "selected" : ""}`}
+                          onClick={async () => {
+                            if (await act(
+                              {
+                                type: "review",
+                                transactionId: t.id,
+                                category: c,
+                                incomeStream: t.incomeStream,
+                              },
+                              "Category updated. We’ll remember this merchant.",
+                            )) setModal(null);
+                          }}
+                        >
+                          {s!.categories[c]}
+                        </button>
+                      ))}
+                      {(s!.subcategories || []).map(c => <button key={c.id} className={`category-option ${t.subcategoryId === c.id ? "selected" : ""}`} onClick={async () => {
+                        if (await act({ type: "review", transactionId: t.id, category: c.group, subcategoryId: c.id, incomeStream: t.incomeStream }, "Category updated. We’ll remember this merchant.")) setModal(null);
+                      }}>{c.name}</button>)}
+                    </div>
+                  </>
+                )}
+                <p className="field-label">note</p>
+                <div className="detail-note">
+                  <input
+                    placeholder="add a note…"
+                    defaultValue={t.note || ""}
+                    onBlur={(e) => {
+                      if (e.currentTarget.value !== (t.note || "")) act({ type: "note", transactionId: t.id, note: e.currentTarget.value }, "Note saved.");
+                    }}
+                  />
+                </div>
+                <div className="design-sheet-extras">
+                  <button data-h="tap" onClick={() => { setActiveTxId(t.id); setSplitAmounts({ expenses: 0, spending: 0, savings: 0, [t.category || "spending"]: t.amount / 100 } as Record<Category, number>); setSplitSheet(true); }}>split it</button>
+                  <button data-h="tap" onClick={() => { setActiveTxId(t.id); setIgnoreReason(""); setIgnoreAlways(false); setIgnoreSheet(true); }}>ignore</button>
                 </div>
               </div>,
-            )
-          }
+            );
+          }}
         >
           <MoreHorizontal size={18} />
         </button>
@@ -795,7 +887,6 @@ export default function App() {
             sofar<span className="brand-dot">.</span>
           </span>
         </a>
-        <div className="workspace-label">your little money corner</div>
         <nav>
           {(["Overview", "Review inbox", "Transactions", "Accounts", "Savings goal", "Calculators"] as Page[]).map((p) => {
             const Icon = icons[p];
@@ -829,17 +920,6 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-note">
-            <div className="tiny-sprout">
-              <Sprout size={23} />
-            </div>
-            <strong>a little clarity goes a long way.</strong>
-            <p>
-              just your money.
-              <br />
-              one day at a time.
-            </p>
-          </div>
           <button
             className={`nav-item ${page === "Settings" ? "active" : ""}`}
             onClick={() => go("Settings")}
@@ -847,22 +927,6 @@ export default function App() {
             <Settings2 size={19} />
             settings
           </button>
-          <div className="profile">
-            <span className="avatar">{s.demo ? "D" : "Y"}</span>
-            <div>
-              <strong>{s.demo ? "Demo workspace" : "Your workspace"}</strong>
-              <span>
-                {s.demo ? "Make yourself at home" : "Personal account"}
-              </span>
-            </div>
-            <button
-              className="icon-button"
-              aria-label="account options"
-              onClick={() => go("Settings")}
-            >
-              <ChevronDown size={16} />
-            </button>
-          </div>
         </div>
       </aside>
       <div className="main-shell" inert={!!modal}>
@@ -876,17 +940,6 @@ export default function App() {
         <main>
           <div className="page-heading">
             <div>
-              <div className="eyebrow">
-                {page === "Overview"
-                  ? "A LITTLE CLARITY FOR YOUR MONEY"
-                  : page === "Should I buy this"
-                    ? "a moment to think it through"
-                  : page === "Calculators"
-                    ? "a few ways to look ahead"
-                  : page === "Review inbox"
-                    ? "A FEW SMALL DECISIONS"
-                    : "YOUR MONEY, AT YOUR PACE"}
-              </div>
               <h1>
                 {page === "Overview"
                   ? "your money"
@@ -960,7 +1013,7 @@ export default function App() {
                   <RefreshCw size={17} className={busy ? "spin" : ""} />
                   {busy ? "syncing…" : "sync now"}
                 </button>
-                <button className="button primary" onClick={() => linkBank()}>
+                <button className="button primary" onClick={() => setLinkSheet(true)}>
                   <Plus size={17} />
                   connect an account
                 </button>
@@ -979,7 +1032,7 @@ export default function App() {
                 go("Transactions");
                 setFilter(category);
               }}
-              onLink={() => linkBank()}
+              onLink={() => setLinkSheet(true)}
               onSync={sync}
               syncing={busy}
             />
@@ -995,7 +1048,7 @@ export default function App() {
             go("Calculators");
           }} />}
           {page === "Calculators" && <Calculators state={s} onBuy={() => go("Should I buy this")} onSetup={go} />}
-          {page === "Categories" && <Categories state={s} onBack={() => go("Calculators")} onAction={act} />}
+          {page === "Categories" && <Categories state={s} onBack={() => go("Calculators")} onAction={act} onRules={() => go("Sorting rules")} />}
           {page === "Sorting rules" && <SortingRules state={s} onBack={() => go("Calculators")} onAction={act} />}
           {page === "Transactions" && (
             <section className="transaction-page">
@@ -1176,6 +1229,10 @@ export default function App() {
                         <div className="design-sheet-chips">{categories.map(c => <button key={c} data-h="tick" className={selected === c ? "active" : ""} onClick={() => { setReviewCategory(c); setReviewSubcategoryId(undefined); }}>{s.categories[c]}</button>)}</div>
                         {(s.subcategories || []).some(c => c.group === selected) && <><span className="design-sheet-label">more specific</span><div className="design-sheet-chips"><button data-h="tick" className={!selectedSubcategoryId ? "active" : ""} onClick={() => setReviewSubcategoryId(undefined)}>just {s.categories[selected]}</button>{(s.subcategories || []).filter(c => c.group === selected).map(c => <button key={c.id} data-h="tick" className={selectedSubcategoryId === c.id ? "active" : ""} onClick={() => setReviewSubcategoryId(c.id)}>{c.name}</button>)}</div></>}
                         <button className="design-sheet-save" data-h="success" onClick={reviewSheetDrag.close}>use this category</button>
+                        <div className="design-sheet-extras">
+                          <button data-h="tap" onClick={() => { setReviewPicker(false); setActiveTxId(current.id); setSplitAmounts({ expenses: 0, spending: 0, savings: 0, [current.suggested || "spending"]: current.amount / 100 } as Record<Category, number>); setSplitSheet(true); }}>split it</button>
+                          <button data-h="tap" onClick={() => { setReviewPicker(false); setActiveTxId(current.id); setIgnoreReason(""); setIgnoreAlways(false); setIgnoreSheet(true); }}>ignore</button>
+                        </div>
                       </div></div>
                     )}
                   </>
@@ -1424,28 +1481,128 @@ export default function App() {
                     {money(Math.max(0, s.goal.target - s.goal.saved))} to go
                   </span>
                 </div>
-                <div className="monthly-setting">
+                <div className="monthly-setting savings-stepper">
                   <div>
                     <span>monthly contribution</span>
                     <strong>{money(s.goal.monthly)}</strong>
                   </div>
-                  <ShieldCheck size={24} />
+                  <div className="savings-stepper-controls">
+                    <button
+                      type="button"
+                      aria-label="decrease monthly contribution"
+                      disabled={s.goal.monthly < 500}
+                      onClick={() => act({ type: "goal", goal: { ...s.goal, monthly: Math.max(0, s.goal.monthly - 2500) } }, "Monthly contribution updated.")}
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="increase monthly contribution"
+                      onClick={() => act({ type: "goal", goal: { ...s.goal, monthly: s.goal.monthly + 2500 } }, "Monthly contribution updated.")}
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
                 <p className="footnote">
                   this contribution is already set aside in your safe-to-spend
                   amount. actual savings comes from confirmed transactions in
                   your savings category.
                 </p>
+                <button
+                  className="button primary full"
+                  onClick={() => {
+                    setDepositAmount(2500);
+                    setDepositAccountId(s.accounts[0]?.id || "");
+                    setDepositSheet(true);
+                  }}
+                >
+                  <Plus size={17} />
+                  add money
+                </button>
               </section>
-              <aside className="review-aside">
-                <Sprout size={26} />
-                <h3>slow is still forward.</h3>
-                <p>you don’t need a perfect month to make a little progress.</p>
-                <p>
-                  your goal is a plan, not an automatic bank transfer. you stay
-                  in control.
-                </p>
-              </aside>
+              <div className="savings-side">
+                <section className="card savings-chart">
+                  <div className="section-title">
+                    <h2>by month</h2>
+                    <span className="muted">last 6 months</span>
+                  </div>
+                  <div className="savings-bars">
+                    {savingsByMonth.map((m) => (
+                      <div className="savings-bar" key={m.key}>
+                        <i
+                          style={{ height: `${Math.max(4, (m.total / savingsMonthMax) * 100)}%` }}
+                          data-active={m.total > 0}
+                        />
+                        <span>{m.label.toLowerCase()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <section className="card savings-deposits">
+                  <div className="section-title">
+                    <h2>deposits</h2>
+                    <span className="muted">{savingsDeposits.length}</span>
+                  </div>
+                  {savingsDeposits.length ? (
+                    savingsDeposits.slice(0, 8).map((t) => (
+                      <div className="savings-deposit-row" key={t.id}>
+                        <span>{t.merchant.toLowerCase()}</span>
+                        <span className="muted">{dateLabel(t.date)}</span>
+                        <strong>{money(savingsAmount(t), true)}</strong>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="footnote">
+                      no deposits yet. confirmed savings transactions and
+                      manual deposits will show up here.
+                    </p>
+                  )}
+                </section>
+                <aside className="review-aside">
+                  <Sprout size={26} />
+                  <h3>slow is still forward.</h3>
+                  <p>you don’t need a perfect month to make a little progress.</p>
+                  <p>
+                    your goal is a plan, not an automatic bank transfer. you
+                    stay in control.
+                  </p>
+                </aside>
+              </div>
+              {depositSheet && (
+                <div className="design-sheet-backdrop" data-closing={depositSheetDrag.closing} onClick={depositSheetDrag.close}>
+                  <div className="design-sheet" role="dialog" aria-modal="true" aria-label="add money to your goal" data-dragging={depositSheetDrag.dragging} style={depositSheetDrag.style} {...depositSheetDrag.handlers} onClick={(event) => event.stopPropagation()}>
+                    <div className="history-sheet-handle" />
+                    <div className="design-sheet-title">
+                      <h2>add money</h2>
+                      <button aria-label="close" onClick={depositSheetDrag.close}><X size={20} /></button>
+                    </div>
+                    <div className="design-sheet-amount">${(depositAmount / 100).toFixed(2)}</div>
+                    <div className="design-sheet-chips">
+                      {[2500, 5000, 10000, 25000].map((amount) => (
+                        <button key={amount} data-h="tick" className={depositAmount === amount ? "active" : ""} onClick={() => setDepositAmount(amount)}>{money(amount)}</button>
+                      ))}
+                    </div>
+                    <span className="design-sheet-label">from</span>
+                    <div className="design-sheet-chips">
+                      {s.accounts.map((a) => (
+                        <button key={a.id} data-h="tick" className={depositAccountId === a.id ? "active" : ""} onClick={() => setDepositAccountId(a.id)}>{a.name.toLowerCase()}</button>
+                      ))}
+                    </div>
+                    <button
+                      className="design-sheet-save"
+                      data-h="success"
+                      disabled={!depositAccountId || depositAmount <= 0}
+                      onClick={async () => {
+                        if (await act({ type: "add-savings", amount: depositAmount, fromAccountId: depositAccountId }, "Added to your goal."))
+                          depositSheetDrag.close();
+                      }}
+                    >
+                      add {money(depositAmount)}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {page === "Accounts" && (
@@ -1460,53 +1617,104 @@ export default function App() {
                 </strong>
                 <p>balances are separate from your spending allowance.</p>
               </div>
-              <div className="account-grid">
-                {s.accounts.map((a, i) => (
-                  <section className="card account-card" key={a.id}>
-                    <div className="section-title">
-                      <span className={`bank-logo bank-${i}`}>
-                        {a.institution.charAt(0)}
-                      </span>
-                      <span className="pill income">connected</span>
+              {(["depository", "investment"] as const).map((type) => {
+                const group = s.accounts.filter((a) => a.type === type);
+                if (!group.length) return null;
+                const thisMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+                return (
+                  <div className="account-group" key={type}>
+                    <div className="account-group-heading">
+                      <h2>{type === "depository" ? "banking" : "investing"}</h2>
+                      <span className="muted">{money(group.reduce((n, a) => n + a.balance, 0), true)}</span>
                     </div>
-                    <p>{a.institution}</p>
-                    <h2>{a.name}</h2>
-                    <span className="muted">
-                      •••• {a.mask} · {a.subtype || a.type}
-                    </span>
-                    <strong className="account-balance">
-                      {money(a.balance, true)}
-                    </strong>
-                    <div className="account-foot">
-                      <span className="status-dot" />
-                      last synced{" "}
-                      {a.syncedAt
-                        ? new Date(a.syncedAt).toLocaleDateString()
-                        : "—"}
+                    <div className="account-grid">
+                      {group.map((a) => {
+                        const expanded = expandedAccount === a.id;
+                        const monthCount = s.transactions.filter((t) => t.accountId === a.id && t.date.slice(0, 7) === thisMonth).length;
+                        return (
+                          <section className={`card account-card ${expanded ? "expanded" : ""}`} key={a.id}>
+                            <button
+                              type="button"
+                              className="account-card-header"
+                              aria-expanded={expanded}
+                              onClick={() => setExpandedAccount(expanded ? null : a.id)}
+                            >
+                              <span className={`bank-logo bank-${a.institution.charCodeAt(0) % 3}`}>{a.institution.charAt(0)}</span>
+                              <span className="account-card-heading">
+                                <strong>{a.name}</strong>
+                                <small>{a.institution} · •••• {a.mask}</small>
+                              </span>
+                              {a.needsReauth ? <span className="pill pending">reconnect</span> : <span className="pill income">connected</span>}
+                            </button>
+                            <strong className="account-balance">{money(a.balance, true)}</strong>
+                            {a.needsReauth && (
+                              <div className="account-reauth">
+                                <CloudOff size={16} />
+                                <span>we lost the connection to {a.institution.toLowerCase()}. balances may be out of date.</span>
+                                <button
+                                  className="button small-button"
+                                  disabled={busy}
+                                  onClick={async () => {
+                                    setBusy(true);
+                                    await new Promise((r) => setTimeout(r, 900));
+                                    await act({ type: "account-settings", accountId: a.id, clearReauth: true }, "Reconnected.");
+                                    setBusy(false);
+                                  }}
+                                >
+                                  {busy ? <Loader2 className="spin" size={15} /> : "sign in again"}
+                                </button>
+                              </div>
+                            )}
+                            <div className="account-foot">
+                              <span className="status-dot" />
+                              last synced{" "}
+                              {a.syncedAt ? new Date(a.syncedAt).toLocaleDateString() : "—"}
+                            </div>
+                            {expanded && (
+                              <div className="account-detail">
+                                <span className="account-detail-count">{monthCount} transaction{monthCount === 1 ? "" : "s"} this month</span>
+                                <label className="account-toggle">
+                                  <span>counts toward safe to spend</span>
+                                  <button
+                                    type="button"
+                                    data-h="toggle"
+                                    className={`design-rule-switch ${a.excludedFromSafeToSpend ? "" : "on"}`}
+                                    onClick={() =>
+                                      act(
+                                        { type: "account-settings", accountId: a.id, excluded: !a.excludedFromSafeToSpend },
+                                        a.excludedFromSafeToSpend ? "Included in safe to spend." : "Excluded from safe to spend.",
+                                      )
+                                    }
+                                  >
+                                    <span />
+                                  </button>
+                                </label>
+                              </div>
+                            )}
+                            <button
+                              className="account-view"
+                              onClick={() => {
+                                go("Transactions");
+                                setAccountFilter(a.id);
+                              }}
+                            >
+                              view transactions
+                              <ArrowRight size={16} />
+                            </button>
+                          </section>
+                        );
+                      })}
                     </div>
-                    <button
-                      className="account-view"
-                      onClick={() => {
-                        go("Transactions");
-                        setAccountFilter(a.id);
-                      }}
-                    >
-                      view transactions
-                      <ArrowRight size={16} />
-                    </button>
-                  </section>
-                ))}
-                <button
-                  className="account-add"
-                  onClick={() => linkBank("investments")}
-                >
-                  <span>
-                    <Plus size={27} />
-                  </span>
-                  <h3>add an investment account</h3>
-                  <p>a home for the bigger picture.</p>
-                </button>
-              </div>
+                  </div>
+                );
+              })}
+              <button className="account-add" onClick={() => setLinkSheet(true)}>
+                <span>
+                  <Plus size={27} />
+                </span>
+                <h3>connect an account</h3>
+                <p>banking, savings, or investments.</p>
+              </button>
               <div className="info-box">
                 <ShieldCheck size={21} />
                 <span>
@@ -1514,6 +1722,34 @@ export default function App() {
                   financial data.
                 </span>
               </div>
+              {linkSheet && (
+                <div className="design-sheet-backdrop" data-closing={linkSheetDrag.closing} onClick={linkSheetDrag.close}>
+                  <div className="design-sheet" role="dialog" aria-modal="true" aria-label="connect an account" data-dragging={linkSheetDrag.dragging} style={linkSheetDrag.style} {...linkSheetDrag.handlers} onClick={(event) => event.stopPropagation()}>
+                    <div className="history-sheet-handle" />
+                    <div className="design-sheet-title">
+                      <h2>connect an account</h2>
+                      <button aria-label="close" onClick={linkSheetDrag.close}><X size={20} /></button>
+                    </div>
+                    <input className="link-search" placeholder="search your bank…" readOnly onFocus={(e) => e.currentTarget.blur()} />
+                    <span className="design-sheet-label">banking</span>
+                    <div className="design-sheet-chips">
+                      {["chase", "bank of america", "ally", "wells fargo"].map((name) => (
+                        <button key={name} data-h="tap" onClick={() => { setLinkSheet(false); linkBank("transactions"); }}>{name}</button>
+                      ))}
+                    </div>
+                    <span className="design-sheet-label">investing</span>
+                    <div className="design-sheet-chips">
+                      {["fidelity", "vanguard", "schwab"].map((name) => (
+                        <button key={name} data-h="tap" onClick={() => { setLinkSheet(false); linkBank("investments"); }}>{name}</button>
+                      ))}
+                    </div>
+                    <p className="design-sheet-help">
+                      <ShieldCheck size={15} />
+                      your bank login stays with plaid. sofar only reads your financial data.
+                    </p>
+                  </div>
+                </div>
+              )}
             </>
           )}
           {page === "Settings" && (
@@ -1534,11 +1770,21 @@ export default function App() {
                 <h2>your devices & security</h2>
                 <div className="setting-line">
                   <div><strong>motion</strong><p>springy movement when you tap, swipe, and open a sheet. your device’s reduced-motion setting takes precedence.</p></div>
-                  <select aria-label="motion style" value={motionMode} onChange={event => { const next = event.target.value as MotionMode; setMotionMode(next); localStorage.setItem("sofar-motion", next); }}><option value="expressive">expressive</option><option value="calm">calm</option><option value="off">off</option></select>
+                  <div className="segmented" role="radiogroup" aria-label="motion style" data-active={(["expressive", "calm", "off"] as MotionMode[]).indexOf(motionMode)}>
+                    {(["expressive", "calm", "off"] as MotionMode[]).map(m => (
+                      <button key={m} type="button" role="radio" aria-checked={motionMode === m} data-h="tick" className={motionMode === m ? "active" : ""} onClick={() => { setMotionMode(m); localStorage.setItem("sofar-motion", m); }}>{m}</button>
+                    ))}
+                  </div>
                 </div>
                 <div className="setting-line">
                   <div><strong>touch feedback</strong><p>distinct pulses for presses, choices, swipes, sheets, and confirmations on supported devices. visual ripples show feedback elsewhere.</p></div>
-                  <span className="setting-actions"><button className="button small-button" type="button" data-h="success" disabled={!hapticsEnabled} aria-label="test touch feedback">feel it</button><button className="button small-button" role="switch" aria-checked={hapticsEnabled} data-h="manual" onClick={event => { const next = !hapticsEnabled; setHapticEnabled(true); emitHaptic(next ? "toggle" : "toggleOff", { x: event.clientX, y: event.clientY }); setHapticsEnabled(next); setHapticEnabled(next); localStorage.setItem("sofar-haptics", next ? "on" : "off"); }}>{hapticsEnabled ? "on" : "off"}</button></span>
+                  <span className="setting-actions">
+                    <button className="button small-button" type="button" data-h="success" disabled={!hapticsEnabled} aria-label="test touch feedback">feel it</button>
+                    <div className="segmented segmented-2" role="radiogroup" aria-label="touch feedback" data-active={hapticsEnabled ? 0 : 1}>
+                      <button type="button" role="radio" aria-checked={hapticsEnabled} data-h="manual" className={hapticsEnabled ? "active" : ""} onClick={event => { if (hapticsEnabled) return; setHapticEnabled(true); emitHaptic("toggle", { x: event.clientX, y: event.clientY }); setHapticsEnabled(true); localStorage.setItem("sofar-haptics", "on"); }}>on</button>
+                      <button type="button" role="radio" aria-checked={!hapticsEnabled} data-h="manual" className={!hapticsEnabled ? "active" : ""} onClick={event => { if (!hapticsEnabled) return; emitHaptic("toggleOff", { x: event.clientX, y: event.clientY }); setHapticsEnabled(false); setHapticEnabled(false); localStorage.setItem("sofar-haptics", "off"); }}>off</button>
+                    </div>
+                  </span>
                 </div>
                 <div className="setting-line">
                   <div>
@@ -1754,6 +2000,70 @@ export default function App() {
             {modal}
           </div>
         </div>
+      )}
+      {splitSheet && activeTx && (
+        <div className="design-sheet-backdrop" data-closing={splitSheetDrag.closing} onClick={splitSheetDrag.close}><div className="design-sheet" role="dialog" aria-modal="true" aria-label="split this transaction" data-dragging={splitSheetDrag.dragging} style={splitSheetDrag.style} {...splitSheetDrag.handlers} onClick={event => event.stopPropagation()}>
+          <div className="history-sheet-handle" /><div className="design-sheet-title"><h2>split {activeTx.merchant.toLowerCase()}</h2><button aria-label="close" onClick={splitSheetDrag.close}><X size={20} /></button></div>
+          <p className="design-sheet-help">divide {money(activeTx.amount, true)} across categories.</p>
+          <div className="split-rows">
+            {categories.map(c => (
+              <label className="split-row" key={c}>
+                <span>{s.categories[c]}</span>
+                <span className="split-input"><span>$</span><input type="number" min="0" step="0.01" value={splitAmounts[c] || ""} onChange={e => setSplitAmounts({ ...splitAmounts, [c]: Number(e.target.value) })} /></span>
+              </label>
+            ))}
+          </div>
+          {(() => {
+            const remainder = activeTx.amount - Math.round(categories.reduce((n, c) => n + (splitAmounts[c] || 0) * 100, 0));
+            const partsUsed = categories.filter(c => (splitAmounts[c] || 0) > 0).length;
+            return (
+              <>
+                <p className={`split-remainder ${remainder === 0 ? "ok" : ""}`}>{remainder === 0 ? "adds up." : `${money(Math.abs(remainder), true)} ${remainder > 0 ? "left to place" : "over"}`}</p>
+                <button
+                  className="design-sheet-save"
+                  data-h="success"
+                  disabled={remainder !== 0 || partsUsed < 2}
+                  onClick={async () => {
+                    const splits = categories.filter(c => (splitAmounts[c] || 0) > 0).map(c => ({ category: c, amount: Math.round((splitAmounts[c] || 0) * 100) }));
+                    if (await act({ type: "split", transactionId: activeTx.id, splits }, "Split across categories.")) {
+                      splitSheetDrag.close();
+                      setModal(null);
+                    }
+                  }}
+                >
+                  save split
+                </button>
+              </>
+            );
+          })()}
+        </div></div>
+      )}
+      {ignoreSheet && activeTx && (
+        <div className="design-sheet-backdrop" data-closing={ignoreSheetDrag.closing} onClick={ignoreSheetDrag.close}><div className="design-sheet" role="dialog" aria-modal="true" aria-label="ignore this transaction" data-dragging={ignoreSheetDrag.dragging} style={ignoreSheetDrag.style} {...ignoreSheetDrag.handlers} onClick={event => event.stopPropagation()}>
+          <div className="history-sheet-handle" /><div className="design-sheet-title"><h2>why ignore it?</h2><button aria-label="close" onClick={ignoreSheetDrag.close}><X size={20} /></button></div>
+          <div className="design-sheet-chips">
+            {["not mine", "duplicate", "refunded", "other"].map(reason => (
+              <button key={reason} data-h="tick" className={ignoreReason === reason ? "active" : ""} onClick={() => setIgnoreReason(reason)}>{reason}</button>
+            ))}
+          </div>
+          <label className="account-toggle">
+            <span>always ignore transactions like this</span>
+            <button type="button" data-h="toggle" className={`design-rule-switch ${ignoreAlways ? "on" : ""}`} onClick={() => setIgnoreAlways(!ignoreAlways)}><span /></button>
+          </label>
+          <button
+            className="design-sheet-save"
+            data-h="success"
+            disabled={!ignoreReason}
+            onClick={async () => {
+              if (await act({ type: "ignore", transactionId: activeTx.id, reason: ignoreReason, always: ignoreAlways }, "Ignored. It won't count toward your budget.")) {
+                ignoreSheetDrag.close();
+                setModal(null);
+              }
+            }}
+          >
+            ignore this transaction
+          </button>
+        </div></div>
       )}
     </div>
   );

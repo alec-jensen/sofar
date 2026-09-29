@@ -1,8 +1,8 @@
-import { ArrowRight, RefreshCw } from "lucide-react";
+import { ArrowRight, CloudOff, RefreshCw } from "lucide-react";
 import { budget, money, type Category, type State, type Transaction } from "./model";
 import RollingNumber from "./RollingNumber";
 import { usePullToSync } from "./usePullToSync";
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 
 type Page = "Transactions" | "Accounts" | "Recurring" | "Savings goal" | "Review inbox" | "Should I buy this" | "Calculators";
 type Props = {
@@ -25,11 +25,25 @@ export function spendingGuide(state: State, now = new Date()) {
   return { left, daysLeft, perDay: Math.round(left / daysLeft) };
 }
 
-export default function Dashboard({ state, count, onPage, onSync, syncing }: Props) {
+export default function Dashboard({ state, count, onPage, onLink, onSync, syncing }: Props) {
   const pull = usePullToSync(onSync, syncing);
+  const [heroMode, setHeroMode] = useState<"perDay" | "total">(
+    () => (localStorage.getItem("sofar-hero-mode") === "total" ? "total" : "perDay"),
+  );
+  const toggleHeroMode = () => {
+    const next = heroMode === "perDay" ? "total" : "perDay";
+    setHeroMode(next);
+    localStorage.setItem("sofar-hero-mode", next);
+  };
   const now = new Date();
   const b = budget(state, now);
   const guide = spendingGuide(state, now);
+  const reauth = state.accounts.filter((a) => a.needsReauth);
+  const banner = reauth.length
+    ? { text: `we lost the connection to ${reauth[0].institution.toLowerCase()}. balances may be out of date.`, label: "reconnect", action: () => onPage("Accounts") }
+    : !state.demo && !state.transactions.length
+      ? { text: "connect an account to see your first safe-to-spend number.", label: "connect", action: onLink }
+      : null;
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const upcoming = state.recurring
     .filter(r => r.confirmed && !r.dismissed && r.type === "bill" && r.nextDate >= today)
@@ -45,11 +59,26 @@ export default function Dashboard({ state, count, onPage, onSync, syncing }: Pro
       <span className="reference-date">{now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }).toLowerCase()}</span>
       <button className="reference-sync" data-h="press" type="button" disabled={syncing} onClick={onSync}><span className="reference-dot" />{syncing ? "syncing…" : syncLabel}<RefreshCw data-sync-spin={syncing} size={13} /></button>
     </div>
+    {banner && (
+      <button className="reference-status-banner" onClick={banner.action} data-h="tap">
+        <CloudOff size={16} />
+        <span>{banner.text}</span>
+        <span className="reference-status-banner-action">{banner.label}<ArrowRight size={14} /></span>
+      </button>
+    )}
     <div className="reference-home-grid">
       <div className="reference-hero">
-        <h1 className="reference-hero-label">safe to spend today</h1>
-        <strong className="reference-hero-number"><RollingNumber value={guide.perDay} format={value => money(Math.round(value))} /></strong>
-        <p className="reference-hero-sub">{money(guide.left)} left this month · {guide.daysLeft} {guide.daysLeft === 1 ? "day" : "days"}</p>
+        <button type="button" className="reference-hero-toggle" data-h="tap" onClick={toggleHeroMode}>
+          <h1 className="reference-hero-label">{heroMode === "perDay" ? "safe to spend today" : "safe to spend till payday"}</h1>
+        </button>
+        <strong className="reference-hero-number">
+          <RollingNumber value={heroMode === "perDay" ? guide.perDay : guide.left} format={value => money(Math.round(value))} />
+        </strong>
+        <p className="reference-hero-sub">
+          {heroMode === "perDay"
+            ? <>{money(guide.left)} left till payday · {guide.daysLeft} {guide.daysLeft === 1 ? "day" : "days"}</>
+            : <>about {money(guide.perDay)} a day · {guide.daysLeft} {guide.daysLeft === 1 ? "day" : "days"} left</>}
+        </p>
         <button className="reference-review" onClick={() => onPage("Review inbox")} aria-label={`${count} to review`}>
           <span className="reference-review-count">{count}</span>
           <span className="reference-review-copy"><strong>{count ? `${count} to review` : "all caught up"}</strong><small>{count ? "about a minute" : "nothing needs your attention"}</small></span>

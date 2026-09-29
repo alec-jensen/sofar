@@ -45,6 +45,7 @@ export async function loadDemo() {
   if (!saved.recurring.some((r) => r.id === "demo-candidate")) {
     saved.recurring.push(demoState().recurring[0]);
   }
+  if (!saved.ignoreRules) saved.ignoreRules = [];
   await save(saved);
   return saved;
 }

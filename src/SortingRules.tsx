@@ -11,6 +11,23 @@ export default function SortingRules({ state, onBack, onAction }: { state: State
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deleteStep, setDeleteStep] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [applyPast, setApplyPast] = useState(false);
+  const suggestions = (() => {
+    const groups = new Map<string, { merchant: string; category: Category; subcategoryId?: string; count: number }>();
+    for (const t of state.transactions) {
+      if (t.status !== "confirmed" || !t.category || t.ignored || t.splits) continue;
+      const pattern = normalize(t.merchant);
+      if (pattern.length < 2 || state.rules.some(r => r.pattern === pattern)) continue;
+      const existing = groups.get(pattern);
+      if (existing?.count === -1) continue;
+      if (existing && (existing.category !== t.category || existing.subcategoryId !== t.subcategoryId)) { existing.count = -1; continue; }
+      groups.set(pattern, { merchant: t.merchant, category: t.category, subcategoryId: t.subcategoryId, count: (existing?.count || 0) + 1 });
+    }
+    return Array.from(groups.entries())
+      .filter(([, g]) => g.count >= 3)
+      .slice(0, 3)
+      .map(([pattern, g]) => ({ pattern, ...g }));
+  })();
   const sheet = useSheetDrag(!!draft, () => { setDraft(null); setDeleteStep(false); });
   useSheetFocus(!!draft);
   useEffect(() => {
@@ -21,12 +38,19 @@ export default function SortingRules({ state, onBack, onAction }: { state: State
   }, [draft]);
   const edit = (rule?: State["rules"][number]) => {
     setDeleteStep(false);
+    setApplyPast(false);
     setDraft(rule ? { pattern: rule.pattern, oldPattern: rule.pattern, category: rule.category, subcategoryId: rule.subcategoryId } : { pattern: "", category: "spending" });
   };
   const save = async () => {
     if (!draft || normalize(draft.pattern).length < 2) return;
     setSaving(true);
-    try { if (await onAction({ type: "rule-upsert", pattern: normalize(draft.pattern), oldPattern: draft.oldPattern, category: draft.category, subcategoryId: draft.subcategoryId }, "Sorting rule saved.")) sheet.close(); }
+    try {
+      const pattern = normalize(draft.pattern);
+      if (await onAction({ type: "rule-upsert", pattern, oldPattern: draft.oldPattern, category: draft.category, subcategoryId: draft.subcategoryId }, "Sorting rule saved.")) {
+        if (applyPast) await onAction({ type: "rule-backfill", pattern, category: draft.category, subcategoryId: draft.subcategoryId }, "Past matches updated too.");
+        sheet.close();
+      }
+    }
     finally { setSaving(false); }
   };
   const remove = async () => {
@@ -41,6 +65,19 @@ export default function SortingRules({ state, onBack, onAction }: { state: State
   return <div className="design-setup">
     <div className="design-setup-heading"><button onClick={onBack}><ArrowLeft size={16} /> tools</button><span>/</span><h1>sorting rules</h1><button className="design-setup-new" data-h="sheet" onClick={() => edit()}><Plus size={16} /> new</button></div>
     <p className="design-setup-intro">new transactions check the most specific merchant matches first. anything left over, we guess and you review.</p>
+    {suggestions.length > 0 && (
+      <div className="design-suggestions">
+        {suggestions.map(sg => {
+          const target = (state.subcategories || []).find(c => c.id === sg.subcategoryId)?.name || state.categories[sg.category];
+          return (
+            <div className="design-suggestion" key={sg.pattern}>
+              <span>you’ve moved <strong>{sg.merchant.toLowerCase()}</strong> to <strong>{target}</strong> {sg.count} times.</span>
+              <button data-h="tap" onClick={() => onAction({ type: "rule-upsert", pattern: sg.pattern, category: sg.category, subcategoryId: sg.subcategoryId }, "Sorting rule saved.")}>make it a rule</button>
+            </div>
+          );
+        })}
+      </div>
+    )}
     <div className="design-rules-list">{state.rules.length ? state.rules.map(rule => {
       const matches = state.transactions.filter(t => normalize(t.merchant).includes(rule.pattern));
       const target = (state.subcategories || []).find(c => c.id === rule.subcategoryId)?.name || state.categories[rule.category];
@@ -58,6 +95,12 @@ export default function SortingRules({ state, onBack, onAction }: { state: State
       {(state.subcategories || []).some(c => c.group === draft.category) && <label className="design-sheet-field">category<select value={draft.subcategoryId || ""} onChange={event => setDraft({ ...draft, subcategoryId: event.target.value || undefined })}><option value="">group only</option>{(state.subcategories || []).filter(c => c.group === draft.category).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
       <p className="design-sheet-help">matches a merchant’s name, ignoring punctuation and capitalization. you’ll still review new transactions.</p>
       <div className="design-rule-preview"><strong>{draftMatches.length} {draftMatches.length === 1 ? "past match" : "past matches"}</strong>{draftMatches.slice(0, 2).map(t => <span key={t.id}><span>{t.merchant.toLowerCase()}</span><span>{new Date(t.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }).toLowerCase()} · {Math.abs(t.amount / 100).toLocaleString("en-US", { style: "currency", currency: "USD" })}</span></span>)}</div>
+      {draftMatches.length > 0 && (
+        <label className="account-toggle">
+          <span>fix past ones too</span>
+          <button type="button" data-h="toggle" className={`design-rule-switch ${applyPast ? "on" : ""}`} onClick={() => setApplyPast(!applyPast)}><span /></button>
+        </label>
+      )}
       <button className="design-sheet-save" data-h="success" disabled={saving || normalize(draft.pattern).length < 2} onClick={save}>{saving ? "saving…" : "save rule"}</button>
       {draft.oldPattern && <div className="design-delete-area">{deleteStep ? <><p>delete this rule? new matches will need review again.</p><div><button onClick={() => setDeleteStep(false)}>keep it</button><button data-h="thud" disabled={saving} onClick={remove}>yes, delete</button></div></> : <button data-h="soft" onClick={() => setDeleteStep(true)}>delete rule</button>}</div>}
     </div></div>}

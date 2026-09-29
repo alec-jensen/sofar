@@ -139,6 +139,93 @@ describe("money rules", () => {
     const deleted = applyAction(moved, { id: "delete", type: "subcategory-delete", subcategoryId: rent.id });
     expect(deleted.transactions.find(t => t.id === "t4")?.subcategoryId).toBeUndefined();
   });
+  it("ignores a transaction and, when marked always, remembers the merchant", () => {
+    const s = demoState();
+    const before = budget(s).totals.expenses;
+    const next = applyAction(s, {
+      id: "ignore1",
+      type: "ignore",
+      transactionId: "pending0",
+      reason: "not mine",
+      always: true,
+    });
+    const t = next.transactions.find((t) => t.id === "pending0")!;
+    expect(t.status).toBe("confirmed");
+    expect(t.ignored).toBe(true);
+    expect(next.ignoreRules.some((r) => r.pattern === "netflix")).toBe(true);
+    expect(budget(next).totals.expenses).toBe(before);
+  });
+  it("splits a transaction across categories and totals each part", () => {
+    const s = demoState();
+    const t0 = s.transactions.find((t) => t.id === "t0")!;
+    const next = applyAction(s, {
+      id: "split1",
+      type: "split",
+      transactionId: "t0",
+      splits: [
+        { category: "spending", amount: Math.round(t0.amount / 2) },
+        { category: "savings", amount: t0.amount - Math.round(t0.amount / 2) },
+      ],
+    });
+    const t = next.transactions.find((t) => t.id === "t0")!;
+    expect(t.splits).toHaveLength(2);
+    const b = budget(next);
+    expect(b.totals.spending + b.totals.savings).toBeGreaterThanOrEqual(
+      Math.round(t0.amount / 2),
+    );
+    expect(() =>
+      applyAction(s, {
+        id: "bad-split",
+        type: "split",
+        transactionId: "t0",
+        splits: [{ category: "spending", amount: 1 }],
+      }),
+    ).toThrow();
+  });
+  it("adds a manual savings deposit and updates saved total", () => {
+    const s = demoState();
+    const before = s.goal.saved;
+    const next = applyAction(s, {
+      id: "deposit1",
+      type: "add-savings",
+      amount: 5000,
+      fromAccountId: "checking",
+    });
+    expect(next.goal.saved).toBe(before + 5000);
+  });
+  it("excludes an account from safe-to-spend and clears reauth", () => {
+    const s = demoState();
+    const withNeed = { ...s, accounts: s.accounts.map((a) => a.id === "checking" ? { ...a, needsReauth: true } : a) };
+    const before = budget(withNeed).salary;
+    const excluded = applyAction(withNeed, {
+      id: "exclude1",
+      type: "account-settings",
+      accountId: "checking",
+      excluded: true,
+    });
+    expect(budget(excluded).salary).toBe(0);
+    expect(budget(excluded).salary).not.toBe(before);
+    const reauthed = applyAction(excluded, {
+      id: "reauth1",
+      type: "account-settings",
+      accountId: "checking",
+      clearReauth: true,
+    });
+    expect(reauthed.accounts.find((a) => a.id === "checking")?.needsReauth).toBe(false);
+  });
+  it("backfills a rule's category onto past confirmed matches", () => {
+    const s = demoState();
+    const next = applyAction(s, {
+      id: "backfill1",
+      type: "rule-backfill",
+      pattern: "whole foods",
+      category: "expenses",
+      subcategoryId: "rent",
+    });
+    const t = next.transactions.find((t) => t.id === "t0")!;
+    expect(t.category).toBe("expenses");
+    expect(t.subcategoryId).toBe("rent");
+  });
   it("can pause, edit, and delete sorting rules", () => {
     const s = demoState();
     const added = applyAction(s, { id: "rule1", type: "rule-upsert", pattern: "trader joe", category: "spending", subcategoryId: "groceries" });
