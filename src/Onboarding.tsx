@@ -31,7 +31,7 @@ export default function Onboarding({ state, onAction, onLinkBank, onDone }: Prop
   const bills = state.recurring.filter((r) => r.type === "bill" && !r.confirmed);
   const [checkedBills, setCheckedBills] = useState<Set<string>>(new Set(bills.map((b) => b.id)));
   const [goalName, setGoalName] = useState(state.goal.name || "a little breathing room");
-  const [goalMonthly, setGoalMonthly] = useState(state.goal.monthly || 5000);
+  const [goalMonthly, setGoalMonthly] = useState(state.goal.monthly);
 
   return (
     <div className="onboarding-shell">

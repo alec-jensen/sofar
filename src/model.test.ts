@@ -181,6 +181,17 @@ describe("money rules", () => {
         splits: [{ category: "spending", amount: 1 }],
       }),
     ).toThrow();
+    expect(() =>
+      applyAction(s, {
+        id: "split-income",
+        type: "split",
+        transactionId: "pending2",
+        splits: [
+          { category: "spending", amount: 3100 },
+          { category: "savings", amount: 3100 },
+        ],
+      }),
+    ).toThrow();
   });
   it("adds a manual savings deposit and updates saved total", () => {
     const s = demoState();

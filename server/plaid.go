@@ -92,6 +92,35 @@ func (s *server) linkToken(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, map[string]any{"link_token": out["link_token"]})
 }
+func (s *server) updateLinkToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AccountID string `json:"accountId"`
+	}
+	if decode(r, &in) != nil || in.AccountID == "" {
+		fail(w, 400, "Choose an account to reconnect.")
+		return
+	}
+	var sealed string
+	if e := s.db.QueryRowContext(r.Context(), "SELECT p.access_token FROM accounts a JOIN plaid_items p ON p.id=a.plaid_item_id WHERE a.id=$1", in.AccountID).Scan(&sealed); e != nil {
+		fail(w, 404, "Account not found.")
+		return
+	}
+	token, e := s.unseal(sealed)
+	if e != nil {
+		fail(w, 500, "Could not read the bank connection.")
+		return
+	}
+	req := map[string]any{"client_name": "sofar", "language": "en", "country_codes": []string{"US"}, "user": map[string]string{"client_user_id": "sofar-single-user"}, "access_token": token}
+	if strings.HasPrefix(s.origin, "https://") {
+		req["webhook"] = s.origin + "/api/plaid/webhook"
+	}
+	var out map[string]any
+	if e := s.plaid(r.Context(), "/link/token/create", req, &out); e != nil {
+		fail(w, 502, e.Error())
+		return
+	}
+	respond(w, map[string]any{"link_token": out["link_token"]})
+}
 func (s *server) exchange(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		PublicToken string `json:"public_token"`
@@ -203,6 +232,10 @@ func (s *server) syncAll(ctx context.Context) error {
 		if e = s.syncItem(ctx, it); e != nil {
 			failures = append(failures, it.Institution+": "+e.Error())
 			s.db.ExecContext(ctx, "UPDATE plaid_items SET last_error=$1 WHERE id=$2", e.Error(), it.ID)
+			var pe plaidError
+			if errors.As(e, &pe) && needsReauth(pe.Code) {
+				s.markReauth(ctx, it.ID)
+			}
 			log.Warn().Str("item", it.ID).Err(e).Msg("sync incomplete")
 		}
 	}
@@ -221,6 +254,18 @@ func (s *server) syncAll(ctx context.Context) error {
 		return errors.New(strings.Join(failures, "; "))
 	}
 	return nil
+}
+func needsReauth(code string) bool {
+	switch code {
+	case "ITEM_LOGIN_REQUIRED", "PENDING_EXPIRATION", "USER_PERMISSION_REVOKED", "PENDING_DISCONNECT":
+		return true
+	}
+	return false
+}
+func (s *server) markReauth(ctx context.Context, item string) {
+	if _, e := s.db.ExecContext(ctx, "UPDATE accounts SET needs_reauth=true WHERE plaid_item_id=$1", item); e != nil {
+		log.Warn().Err(e).Str("item", item).Msg("could not flag reconnect")
+	}
 }
 func allowedAccount(a plaidAccount) bool {
 	return a.Type == "investment" || (a.Type == "depository" && (a.Subtype == "checking" || a.Subtype == "savings"))
@@ -319,6 +364,24 @@ func (s *server) syncItem(ctx context.Context, it plaidItem) error {
 			return e
 		}
 	}
+	ignorePatterns := []string{}
+	patternRows, e := tx.QueryContext(ctx, "SELECT merchant_pattern FROM ignore_rules")
+	if e != nil {
+		return e
+	}
+	for patternRows.Next() {
+		var pattern string
+		if e = patternRows.Scan(&pattern); e != nil {
+			patternRows.Close()
+			return e
+		}
+		ignorePatterns = append(ignorePatterns, pattern)
+	}
+	e = patternRows.Err()
+	patternRows.Close()
+	if e != nil {
+		return e
+	}
 	for _, t := range added {
 		if !allowed[t.AccountID] || t.Currency != "USD" && t.Currency != "" {
 			continue
@@ -349,10 +412,23 @@ func (s *server) syncItem(ctx context.Context, it plaidItem) error {
 			if e = unlinkForTransaction(ctx, tx, t.ID); e != nil {
 				return e
 			}
+			if _, e = tx.ExecContext(ctx, "DELETE FROM transaction_splits WHERE transaction_id=$1", t.ID); e != nil {
+				return e
+			}
 		}
-		_, e = tx.ExecContext(ctx, `INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,bank_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET date=$3,amount=$4,raw_merchant=$5,clean_merchant=$6,direction=$7,bank_pending=$8,review_status=CASE WHEN $9 THEN 'pending' ELSE transactions.review_status END,category_id=CASE WHEN $9 THEN NULL ELSE transactions.category_id END,subcategory_id=CASE WHEN $9 THEN NULL ELSE transactions.subcategory_id END,income_stream=CASE WHEN $9 THEN NULL ELSE transactions.income_stream END`, t.ID, t.AccountID, t.Date, amount, merchant, budget.Normalize(merchant), direction, t.Pending, changed)
+		_, e = tx.ExecContext(ctx, `INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,bank_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET date=$3,amount=$4,raw_merchant=$5,clean_merchant=$6,direction=$7,bank_pending=$8,review_status=CASE WHEN $9 THEN 'pending' ELSE transactions.review_status END,category_id=CASE WHEN $9 THEN NULL ELSE transactions.category_id END,subcategory_id=CASE WHEN $9 THEN NULL ELSE transactions.subcategory_id END,income_stream=CASE WHEN $9 THEN NULL ELSE transactions.income_stream END,ignored=CASE WHEN $9 THEN false ELSE transactions.ignored END,ignore_reason=CASE WHEN $9 THEN '' ELSE transactions.ignore_reason END`, t.ID, t.AccountID, t.Date, amount, merchant, budget.Normalize(merchant), direction, t.Pending, changed)
 		if e != nil {
 			return e
+		}
+		if err == sql.ErrNoRows && !t.Pending && direction == "out" {
+			for _, pattern := range ignorePatterns {
+				if budget.Matches(merchant, pattern) {
+					if _, e = tx.ExecContext(ctx, "UPDATE transactions SET review_status='confirmed',ignored=true,ignore_reason='always ignored',category_id=NULL WHERE id=$1", t.ID); e != nil {
+						return e
+					}
+					break
+				}
+			}
 		}
 	}
 	for _, id := range removed {
@@ -361,6 +437,9 @@ func (s *server) syncItem(ctx context.Context, it plaidItem) error {
 		}
 	}
 	if _, e = tx.ExecContext(ctx, "UPDATE plaid_items SET cursor=$1,last_error=NULL WHERE id=$2", cursor, it.ID); e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, "UPDATE accounts SET needs_reauth=false WHERE plaid_item_id=$1", it.ID); e != nil {
 		return e
 	}
 	return tx.Commit()
@@ -524,6 +603,9 @@ func (s *server) webhook(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Code   string `json:"webhook_code"`
 		ItemID string `json:"item_id"`
+		Error  struct {
+			Code string `json:"error_code"`
+		} `json:"error"`
 	}
 	if json.Unmarshal(body, &payload) != nil {
 		fail(w, 400, "Invalid webhook.")
@@ -535,6 +617,10 @@ func (s *server) webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch payload.Code {
+	case "ERROR", "PENDING_EXPIRATION", "USER_PERMISSION_REVOKED", "PENDING_DISCONNECT":
+		if payload.Code != "ERROR" || needsReauth(payload.Error.Code) {
+			s.markReauth(r.Context(), payload.ItemID)
+		}
 	case "SYNC_UPDATES_AVAILABLE", "HISTORICAL_UPDATE", "DEFAULT_UPDATE", "HOLDINGS_UPDATED":
 		ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 		defer cancel()

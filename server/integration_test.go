@@ -22,24 +22,28 @@ import (
 )
 
 func TestFullFlow(t *testing.T) {
-	root, e := os.Getwd()
-	if e != nil {
-		t.Fatal(e)
+	dbURL := os.Getenv("SOFAR_TEST_DATABASE_URL")
+	if dbURL == "" {
+		root, e := os.Getwd()
+		if e != nil {
+			t.Fatal(e)
+		}
+		cache := filepath.Join(root, ".cache")
+		if e = os.MkdirAll(cache, 0700); e != nil {
+			t.Fatal(e)
+		}
+		runtime, e := os.MkdirTemp(cache, "pg-test-")
+		if e != nil {
+			t.Fatal(e)
+		}
+		pg := embeddedpostgres.NewDatabase(embeddedpostgres.DefaultConfig().Version(embeddedpostgres.V17).Port(55439).Database("sofar_test").Username("sofar_test").Password("local-test-only").CachePath(cache).BinariesPath(filepath.Join(cache, "binaries")).RuntimePath(runtime).DataPath(filepath.Join(runtime, "data")).BinaryRepositoryURL("https://repo.maven.apache.org/maven2").StartTimeout(60 * time.Second))
+		if e = pg.Start(); e != nil {
+			t.Fatal(e)
+		}
+		defer pg.Stop()
+		dbURL = "postgres://sofar_test:local-test-only@localhost:55439/sofar_test?sslmode=disable"
 	}
-	cache := filepath.Join(root, ".cache")
-	if e = os.MkdirAll(cache, 0700); e != nil {
-		t.Fatal(e)
-	}
-	runtime, e := os.MkdirTemp(cache, "pg-test-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	pg := embeddedpostgres.NewDatabase(embeddedpostgres.DefaultConfig().Version(embeddedpostgres.V17).Port(55439).Database("sofar_test").Username("sofar_test").Password("local-test-only").CachePath(cache).BinariesPath(filepath.Join(cache, "binaries")).RuntimePath(runtime).DataPath(filepath.Join(runtime, "data")).BinaryRepositoryURL("https://repo.maven.apache.org/maven2").StartTimeout(60 * time.Second))
-	if e = pg.Start(); e != nil {
-		t.Fatal(e)
-	}
-	defer pg.Stop()
-	database, e := db.Open(context.Background(), "postgres://sofar_test:local-test-only@localhost:55439/sofar_test?sslmode=disable")
+	database, e := db.Open(context.Background(), dbURL)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -118,10 +122,16 @@ func TestFullFlow(t *testing.T) {
 	t.Setenv("PLAID_CLIENT_ID", "fixture")
 	t.Setenv("PLAID_SECRET", "fixture")
 	pages := 0
+	reauth := false
 	plaid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/accounts/get":
+			if reauth {
+				w.WriteHeader(400)
+				io.WriteString(w, `{"error_code":"ITEM_LOGIN_REQUIRED","error_message":"login required"}`)
+				return
+			}
 			io.WriteString(w, `{"accounts":[{"account_id":"a","name":"Checking","type":"depository","subtype":"checking","mask":"1234","balances":{"current":1000,"iso_currency_code":"USD"}}]}`)
 		case "/transactions/sync":
 			pages++
@@ -129,6 +139,8 @@ func TestFullFlow(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(&req)
 			if req["cursor"] == "" {
 				io.WriteString(w, `{"added":[{"transaction_id":"plaid1","account_id":"a","date":"2026-08-01","amount":15,"name":"NETFLIX.COM","iso_currency_code":"USD"}],"modified":[],"removed":[],"next_cursor":"page2","has_more":true}`)
+			} else if req["cursor"] == "done" {
+				io.WriteString(w, `{"added":[{"transaction_id":"plaid4","account_id":"a","date":"2026-08-20","amount":15,"name":"NETFLIX.COM","iso_currency_code":"USD"}],"modified":[],"removed":[],"next_cursor":"done2","has_more":false}`)
 			} else {
 				io.WriteString(w, `{"added":[{"transaction_id":"plaid2","account_id":"a","date":"2026-07-01","amount":15,"name":"Netflix 07/01","iso_currency_code":"USD"},{"transaction_id":"plaid3","account_id":"a","date":"2026-06-01","amount":15,"name":"Netflix 06/01","iso_currency_code":"USD"}],"modified":[],"removed":[],"next_cursor":"done","has_more":false}`)
 			}
@@ -175,6 +187,98 @@ func TestFullFlow(t *testing.T) {
 	call("/api/actions", string(restored), 200)
 	if e = database.QueryRow("SELECT dismissed FROM recurring_groups WHERE id=$1", recurringID).Scan(&hidden); e != nil || hidden {
 		t.Fatal("recurring pattern was not restored", e)
+	}
+	getState := func() map[string]any {
+		t.Helper()
+		var st map[string]any
+		if e := json.Unmarshal(call("/api/state", "", 200).Body.Bytes(), &st); e != nil {
+			t.Fatal(e)
+		}
+		return st
+	}
+	findTx := func(id string) map[string]any {
+		t.Helper()
+		for _, x := range getState()["transactions"].([]any) {
+			if m := x.(map[string]any); m["id"] == id {
+				return m
+			}
+		}
+		t.Fatalf("transaction %s missing", id)
+		return nil
+	}
+	// notes
+	call("/api/actions", `{"id":"offline-action-020","type":"note","transactionId":"plaid1","note":"keep the receipt"}`, 200)
+	if findTx("plaid1")["note"] != "keep the receipt" {
+		t.Fatal("note did not persist")
+	}
+	call("/api/actions", `{"id":"offline-action-021","type":"note","transactionId":"missing","note":"x"}`, 400)
+	// ignore, with an always-ignore rule
+	call("/api/actions", `{"id":"offline-action-022","type":"ignore","transactionId":"plaid1","reason":"not mine","always":true}`, 200)
+	if x := findTx("plaid1"); x["ignored"] != true || x["status"] != "confirmed" || x["ignoreReason"] != "not mine" || x["category"] != nil {
+		t.Fatalf("ignore did not apply: %v", x)
+	}
+	if rules := getState()["ignoreRules"].([]any); len(rules) != 1 || rules[0].(map[string]any)["pattern"] != "netflix" {
+		t.Fatalf("always-ignore rule missing: %v", rules)
+	}
+	// re-reviewing clears ignore
+	call("/api/actions", `{"id":"offline-action-023","type":"review","transactionId":"plaid1","category":"expenses"}`, 200)
+	if findTx("plaid1")["ignored"] == true {
+		t.Fatal("review must clear ignore")
+	}
+	// splits
+	call("/api/actions", `{"id":"offline-action-024","type":"split","transactionId":"plaid2","splits":[{"category":"spending","amount":1000},{"category":"savings","amount":499}]}`, 400)
+	call("/api/actions", `{"id":"offline-action-025","type":"split","transactionId":"plaid2","splits":[{"category":"spending","amount":1500}]}`, 400)
+	call("/api/actions", `{"id":"offline-action-026","type":"split","transactionId":"plaid2","splits":[{"category":"spending","amount":1000},{"category":"savings","amount":500}]}`, 200)
+	if x := findTx("plaid2"); x["category"] != nil || len(x["splits"].([]any)) != 2 || x["status"] != "confirmed" {
+		t.Fatalf("split did not apply: %v", x)
+	}
+	call("/api/actions", `{"id":"offline-action-027","type":"split","transactionId":"credit","splits":[{"category":"spending","amount":2000},{"category":"savings","amount":2000}]}`, 400)
+	savedBefore := getState()["goal"].(map[string]any)["saved"].(float64)
+	// manual savings deposit
+	call("/api/actions", `{"id":"offline-action-028","type":"add-savings","amount":2500,"fromAccountId":"a","note":"birthday money"}`, 200)
+	call("/api/actions", `{"id":"offline-action-028","type":"add-savings","amount":2500,"fromAccountId":"a","note":"birthday money"}`, 200)
+	call("/api/actions", `{"id":"offline-action-029","type":"add-savings","amount":2500,"fromAccountId":"nope"}`, 400)
+	if x := findTx("offline-action-028"); x["category"] != "savings" || x["merchant"] != "birthday money" || x["amount"].(float64) != 2500 {
+		t.Fatalf("savings deposit wrong: %v", x)
+	}
+	if got := getState()["goal"].(map[string]any)["saved"].(float64); got != savedBefore+2500 {
+		t.Fatalf("saved total %v want %v", got, savedBefore+2500)
+	}
+	// backfill a rule onto past transactions
+	call("/api/actions", `{"id":"offline-action-030","type":"rule-backfill","pattern":"dinner","category":"savings"}`, 200)
+	if findTx("expense")["category"] != "savings" {
+		t.Fatal("backfill did not update past matches")
+	}
+	call("/api/actions", `{"id":"offline-action-031","type":"rule-backfill","pattern":"x","category":"savings"}`, 400)
+	// excluding an account changes the baseline and is reflected in state
+	call("/api/actions", `{"id":"offline-action-032","type":"account-settings","accountId":"a","excluded":true}`, 200)
+	accountA := func() map[string]any {
+		for _, x := range getState()["accounts"].([]any) {
+			if m := x.(map[string]any); m["id"] == "a" {
+				return m
+			}
+		}
+		return nil
+	}
+	if accountA()["excludedFromSafeToSpend"] != true {
+		t.Fatal("exclusion not stored")
+	}
+	call("/api/actions", `{"id":"offline-action-033","type":"account-settings","accountId":"a","excluded":false}`, 200)
+	// a broken bank connection flags reconnect, cannot be cleared by hand, and heals on the next good sync
+	reauth = true
+	call("/api/sync", `{}`, 502)
+	if accountA()["needsReauth"] != true {
+		t.Fatal("login-required error must flag the account for reconnect")
+	}
+	call("/api/actions", `{"id":"offline-action-034","type":"account-settings","accountId":"a","clearReauth":true}`, 400)
+	reauth = false
+	call("/api/sync", `{}`, 200)
+	if accountA()["needsReauth"] == true {
+		t.Fatal("successful sync must clear the reconnect flag")
+	}
+	// always-ignored merchants are skipped on ingest
+	if x := findTx("plaid4"); x["ignored"] != true || x["status"] != "confirmed" {
+		t.Fatalf("ingest should auto-ignore: %v", x)
 	}
 	endpoint := "https://fcm.googleapis.com/fcm/send/test-subscription"
 	if _, e = database.Exec("INSERT INTO push_subscriptions(endpoint,user_id,keys) VALUES($1,1,'{}')", endpoint); e != nil {

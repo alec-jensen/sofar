@@ -337,7 +337,7 @@ export function applyAction(state: State, a: Action): State {
   }
   if (a.type === "rule-backfill" && a.pattern && a.category) {
     for (const tx of s.transactions) {
-      if (tx.status === "confirmed" && !tx.ignored && !tx.splits && normalize(tx.merchant).includes(a.pattern)) {
+      if (tx.status === "confirmed" && tx.direction === "out" && !tx.ignored && !tx.splits && normalize(tx.merchant).includes(a.pattern)) {
         tx.category = a.category;
         tx.subcategoryId = a.subcategoryId;
       }
@@ -360,6 +360,9 @@ export function applyAction(state: State, a: Action): State {
     }
   }
   if (a.type === "split" && t && a.splits) {
+    if (t.direction !== "out") throw new Error("Only spending can be split.");
+    if (s.links.some((l) => l.expenseId === t.id))
+      throw new Error("Unlink repayments before splitting this expense.");
     if (
       a.splits.length < 2 ||
       a.splits.some((sp) => sp.amount <= 0) ||

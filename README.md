@@ -68,7 +68,9 @@ $env:TRUST_PROXY = 'false'
 go run ./server
 ```
 
-Run `npm run dev` in another terminal and use **http://127.0.0.1:5173** (the origin must match). Point `DATABASE_URL` at your local Postgres. For a production frontend locally, `npm run build`, set `SOFAR_ORIGIN=http://localhost:8080` and `SOFAR_ENV=development`, and visit the Go server at that origin. Development explicitly allows HTTP with a non-Secure session cookie; production does not.
+Run `npm run dev` in another terminal. The Vite dev server proxies `/api` to the Go process and rewrites the request `Origin` to `SOFAR_ORIGIN` (default `http://localhost:8080`), so the exact-origin check passes whichever port you browse. Point `DATABASE_URL` at your local Postgres. To serve the built frontend from Go instead, `npm run build`, set `SOFAR_ORIGIN=http://localhost:8080` and `SOFAR_ENV=development`, and visit the Go server at that origin. Development explicitly allows HTTP with a non-Secure session cookie; production does not.
+
+Without Go installed, `docker compose up -d --build` runs the whole stack (Postgres, the API, and the built frontend) at `http://localhost:8080` using the values in `.env` (set `SOFAR_ENV=development`, `SOFAR_ORIGIN=http://localhost:8080`, and `TRUST_PROXY=false` for local HTTP). `docker compose down -v` resets the database.
 
 ## How the numbers work
 
@@ -82,6 +84,15 @@ Run `npm run dev` in another terminal and use **http://127.0.0.1:5173** (the ori
 - Savings progress sums all confirmed outgoing Savings-category transactions minus linked reimbursements. It does not use expected contributions or initiate bank transfers. This first version treats those historical Savings transactions as progress toward the one active goal; it does not allocate transactions among multiple goals.
 - Merchant rules normalize case, numbers, punctuation, and `.com`, then use substring matches. The longest matching pattern wins. Rules suggest a category or subcategory; nothing is silently confirmed.
 - Recurring candidates need the configured occurrence count, consistent weekly/biweekly/monthly/annual spacing, and initially similar amounts (within 20% of their average). Once identified, the item's own configured tolerance governs changes. Irregular income is classified independently in the transaction queue, never inferred as salary from an inconsistent cadence.
+
+## Reviewing and adjusting transactions
+
+- **Ignore** removes a transaction from every budget total. An optional reason is stored, and "always ignore" saves the merchant so future posted outgoing transactions from it arrive already ignored. Re-categorizing an ignored transaction brings it back.
+- **Split** divides one posted outgoing transaction across two to ten category parts that must add up to its exact amount. Split transactions cannot carry linked repayments; a material change from the bank (amount or direction) clears the split and sends it back for review.
+- **Notes** are free text (up to 500 characters) stored with the transaction.
+- **Add money** on the goal page records a manual outgoing Savings transaction from a chosen account, which counts toward goal progress like any other savings transaction.
+- **Accounts** can be excluded from safe-to-spend; excluded accounts' transactions do not feed income, bills, or spending. Accounts whose bank needs a new sign-in (Plaid `ITEM_LOGIN_REQUIRED`, pending expiration, or revoked permission, from a failed sync or webhook) are flagged for reconnect; **sign in again** opens Plaid Link in update mode via `/api/plaid/update-token`, and the next successful sync clears the flag.
+- **Sorting rules** can apply to past matching outgoing transactions ("fix past ones too"). Rules still only suggest categories for new transactions.
 
 ## Plaid and sync
 
@@ -116,7 +127,7 @@ go vet ./...
 go test -tags integration ./server -run TestFullFlow -v -timeout 5m
 ```
 
-The integration test downloads a disposable Postgres 17 binary, uses loopback port 55439 and a project-local cache, and stops the test database afterward. It exercises actual schema creation, account setup, cookie sessions, cross-account partial repayment, duplicate-action retries, unlinking, categories, goals, mocked Plaid pagination/recurring detection, logout, and TOTP login. It **does not contact a real bank or send real push notifications**. The regular test suite does not download or start Postgres.
+The integration test downloads a disposable Postgres 17 binary, uses loopback port 55439 and a project-local cache, and stops the test database afterward. To use your own database instead (for example a throwaway container), set `SOFAR_TEST_DATABASE_URL`; it must be empty because the test inserts fixed rows. It exercises actual schema creation, account setup, cookie sessions, cross-account partial repayment, duplicate-action retries, unlinking, categories, goals, notes, ignore rules, splits, manual savings deposits, account exclusion and reconnect flagging, mocked Plaid pagination/recurring detection, logout, and TOTP login. It **does not contact a real bank or send real push notifications**. The regular test suite does not download or start Postgres.
 
 To test Plaid and push end to end, provide your own Sandbox credentials, complete Link, sync and review the data, then enable notifications on an HTTPS device and trigger a sync with pending review items. Live institution connectivity, public TLS routing, and OS push delivery depend on your deployment and cannot be validated with the bundled fixtures.
 
@@ -132,4 +143,4 @@ compose.yaml         Private Postgres + application deployment
 Dockerfile           React/Go build and non-root runtime image
 ```
 
-No multi-user support, arbitrary top-level categories, split transactions, multiple active goals in the UI, or credit-card linking is implemented. Data tables keep room for additional account types and goals later.
+No multi-user support, arbitrary top-level categories, multiple active goals in the UI, or credit-card linking is implemented. Data tables keep room for additional account types and goals later.

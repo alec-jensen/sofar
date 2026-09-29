@@ -37,7 +37,9 @@ export default function Dashboard({ state, count, onPage, onLink, onSync, syncin
   };
   const now = new Date();
   const b = budget(state, now);
-  const guide = spendingGuide(state, now);
+  const dayOne = state.transactions.length === 0;
+  const spending = spendingGuide(state, now);
+  const guide = dayOne ? { ...spending, left: 0, perDay: 0 } : spending;
   const reauth = state.accounts.filter((a) => a.needsReauth);
   const banner = reauth.length
     ? { text: `we lost the connection to ${reauth[0].institution.toLowerCase()}. balances may be out of date.`, label: "reconnect", action: () => onPage("Accounts") }
@@ -49,8 +51,9 @@ export default function Dashboard({ state, count, onPage, onLink, onSync, syncin
     .filter(r => r.confirmed && !r.dismissed && r.type === "bill" && r.nextDate >= today)
     .sort((a, b) => a.nextDate.localeCompare(b.nextDate))
     .slice(0, 3);
+  const neverSynced = new Date(state.lastSync).getFullYear() < 2000;
   const syncMinutes = Math.max(0, Math.floor((Date.now() - new Date(state.lastSync).getTime()) / 60000));
-  const syncLabel = syncMinutes < 1 ? "synced just now" : syncMinutes < 60 ? `synced ${syncMinutes} min ago` : `synced ${Math.floor(syncMinutes / 60)} hr ago`;
+  const syncLabel = neverSynced ? "not synced yet" : syncMinutes < 1 ? "synced just now" : syncMinutes < 60 ? `synced ${syncMinutes} min ago` : `synced ${Math.floor(syncMinutes / 60)} hr ago`;
   const goalPercent = Math.min(100, (state.goal.saved / Math.max(1, state.goal.target)) * 100);
   return <div className="reference-home" ref={pull.root} style={{ "--pull-y": `${pull.pull}px` } as CSSProperties}>
     <div className="reference-pull-indicator" aria-hidden="true" style={{ opacity: Math.min(1, pull.pull / 50) }}>{syncing ? "syncing…" : pull.pull > 64 ? "release to sync" : "pull to sync"}</div>

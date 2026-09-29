@@ -450,6 +450,46 @@ export default function App() {
       setNotice((e as Error).message);
     }
   }
+  async function loadPlaid() {
+    if ((window as any).Plaid) return;
+    await new Promise<void>((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Could not load Plaid Link."));
+      document.head.appendChild(script);
+    });
+  }
+  async function reconnect(accountId: string) {
+    if (!s) return;
+    setBusy(true);
+    try {
+      if (s.demo) {
+        await new Promise((r) => setTimeout(r, 900));
+        await act({ type: "account-settings", accountId, clearReauth: true }, "Reconnected.");
+        return;
+      }
+      const { link_token } = await api("/plaid/update-token", { accountId });
+      await loadPlaid();
+      (window as any).Plaid.create({
+        token: link_token,
+        onSuccess: async () => {
+          try {
+            await sync();
+          } catch (e) {
+            setNotice((e as Error).message);
+          }
+        },
+        onExit: (err: any) => {
+          if (err) setNotice(err.display_message || "Reconnecting was not completed.");
+        },
+      }).open();
+    } catch (e) {
+      setNotice((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function linkBank(kind = "transactions") {
     if (s?.demo) {
       setModal(
@@ -481,17 +521,7 @@ export default function App() {
     }
     try {
       const { link_token } = await api("/plaid/link-token", { kind });
-      if (!(window as any).Plaid) {
-        await new Promise<void>((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src =
-            "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
-          script.onload = () => resolve();
-          script.onerror = () =>
-            reject(new Error("Could not load Plaid Link."));
-          document.head.appendChild(script);
-        });
-      }
+      await loadPlaid();
       (window as any).Plaid.create({
         token: link_token,
         onSuccess: async (public_token: string, metadata: any) => {
@@ -866,7 +896,9 @@ export default function App() {
                   />
                 </div>
                 <div className="design-sheet-extras">
-                  <button data-h="tap" onClick={() => { setActiveTxId(t.id); setSplitAmounts({ expenses: 0, spending: 0, savings: 0, [t.category || "spending"]: t.amount / 100 } as Record<Category, number>); setSplitSheet(true); }}>split it</button>
+                  {t.direction === "out" && !link && !t.bankPending && (
+                    <button data-h="tap" onClick={() => { setActiveTxId(t.id); setSplitAmounts({ expenses: 0, spending: 0, savings: 0, [t.category || "spending"]: t.amount / 100 } as Record<Category, number>); setSplitSheet(true); }}>split it</button>
+                  )}
                   <button data-h="tap" onClick={() => { setActiveTxId(t.id); setIgnoreReason(""); setIgnoreAlways(false); setIgnoreSheet(true); }}>ignore</button>
                 </div>
               </div>,
@@ -1089,7 +1121,7 @@ export default function App() {
                           t.date,
                           `"${t.merchant.replace(/"/g, '""').replace(/^[=+@-]/, "'")}"`,
                           (t.direction === "out" ? -t.amount : t.amount) / 100,
-                          t.category ? s.categories[t.category] : "",
+                          t.ignored ? "ignored" : t.splits ? "split" : t.category ? s.categories[t.category] : "",
                           t.status,
                         ].join(","),
                       ),
@@ -1248,7 +1280,9 @@ export default function App() {
                         {(s.subcategories || []).some(c => c.group === selected) && <><span className="design-sheet-label">more specific</span><div className="design-sheet-chips"><button data-h="tick" className={!selectedSubcategoryId ? "active" : ""} onClick={() => setReviewSubcategoryId(undefined)}>just {s.categories[selected]}</button>{(s.subcategories || []).filter(c => c.group === selected).map(c => <button key={c.id} data-h="tick" className={selectedSubcategoryId === c.id ? "active" : ""} onClick={() => setReviewSubcategoryId(c.id)}>{c.name}</button>)}</div></>}
                         <button className="design-sheet-save" data-h="success" onClick={reviewSheetDrag.close}>use this category</button>
                         <div className="design-sheet-extras">
-                          <button data-h="tap" onClick={() => { setReviewPicker(false); setActiveTxId(current.id); setSplitAmounts({ expenses: 0, spending: 0, savings: 0, [current.suggested || "spending"]: current.amount / 100 } as Record<Category, number>); setSplitSheet(true); }}>split it</button>
+                          {current.direction === "out" && (
+                            <button data-h="tap" onClick={() => { setReviewPicker(false); setActiveTxId(current.id); setSplitAmounts({ expenses: 0, spending: 0, savings: 0, [current.suggested || "spending"]: current.amount / 100 } as Record<Category, number>); setSplitSheet(true); }}>split it</button>
+                          )}
                           <button data-h="tap" onClick={() => { setReviewPicker(false); setActiveTxId(current.id); setIgnoreReason(""); setIgnoreAlways(false); setIgnoreSheet(true); }}>ignore</button>
                         </div>
                       </div></div>
@@ -1672,12 +1706,7 @@ export default function App() {
                                 <button
                                   className="button small-button"
                                   disabled={busy}
-                                  onClick={async () => {
-                                    setBusy(true);
-                                    await new Promise((r) => setTimeout(r, 900));
-                                    await act({ type: "account-settings", accountId: a.id, clearReauth: true }, "Reconnected.");
-                                    setBusy(false);
-                                  }}
+                                  onClick={() => reconnect(a.id)}
                                 >
                                   {busy ? <Loader2 className="spin" size={15} /> : "sign in again"}
                                 </button>

@@ -22,6 +22,15 @@ type Transaction struct {
 	SuggestedSubcategoryID string  `json:"suggestedSubcategoryId,omitempty"`
 	RecurringID            string  `json:"recurringId,omitempty"`
 	BankPending            bool    `json:"bankPending,omitempty"`
+	Note                   string  `json:"note,omitempty"`
+	Ignored                bool    `json:"ignored,omitempty"`
+	IgnoreReason           string  `json:"ignoreReason,omitempty"`
+	Splits                 []Split `json:"splits,omitempty"`
+}
+type Split struct {
+	Category      string `json:"category"`
+	SubcategoryID string `json:"subcategoryId,omitempty"`
+	Amount        int64  `json:"amount"`
 }
 type Recurring struct {
 	ID           string  `json:"id"`

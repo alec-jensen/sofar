@@ -22,6 +22,11 @@ type account struct {
 	Mask        string `json:"mask"`
 	Balance     int64  `json:"balance"`
 	SyncedAt    string `json:"syncedAt"`
+	Excluded    bool   `json:"excludedFromSafeToSpend,omitempty"`
+	NeedsReauth bool   `json:"needsReauth,omitempty"`
+}
+type ignoreRule struct {
+	Pattern string `json:"pattern"`
 }
 type goal struct {
 	Name    string `json:"name"`
@@ -46,6 +51,7 @@ type state struct {
 	Accounts      []account            `json:"accounts"`
 	Recurring     []budget.Recurring   `json:"recurring"`
 	Rules         []rule               `json:"rules"`
+	IgnoreRules   []ignoreRule         `json:"ignoreRules"`
 	Subcategories []subcategory        `json:"subcategories"`
 	Links         []budget.Link        `json:"links"`
 	Goal          goal                 `json:"goal"`
@@ -61,7 +67,7 @@ type querier interface {
 }
 
 func readState(ctx context.Context, q querier) (state, error) {
-	s := state{Transactions: []budget.Transaction{}, Accounts: []account{}, Recurring: []budget.Recurring{}, Rules: []rule{}, Subcategories: []subcategory{}, Links: []budget.Link{}, Categories: map[string]string{}, Threshold: 3}
+	s := state{Transactions: []budget.Transaction{}, Accounts: []account{}, Recurring: []budget.Recurring{}, Rules: []rule{}, IgnoreRules: []ignoreRule{}, Subcategories: []subcategory{}, Links: []budget.Link{}, Categories: map[string]string{}, Threshold: 3}
 	rows, e := q.QueryContext(ctx, "SELECT id,name FROM categories")
 	if e != nil {
 		return s, e
@@ -96,13 +102,13 @@ func readState(ctx context.Context, q querier) (state, error) {
 	if e != nil {
 		return s, e
 	}
-	rows, e = q.QueryContext(ctx, "SELECT id,display_name,institution_name,account_type,account_subtype,mask,balance,COALESCE(to_char(last_synced_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),'') FROM accounts ORDER BY account_type,id")
+	rows, e = q.QueryContext(ctx, "SELECT id,display_name,institution_name,account_type,account_subtype,mask,balance,COALESCE(to_char(last_synced_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),''),excluded_from_safe,needs_reauth FROM accounts ORDER BY account_type,id")
 	if e != nil {
 		return s, e
 	}
 	for rows.Next() {
 		var a account
-		if e = rows.Scan(&a.ID, &a.Name, &a.Institution, &a.Type, &a.Subtype, &a.Mask, &a.Balance, &a.SyncedAt); e != nil {
+		if e = rows.Scan(&a.ID, &a.Name, &a.Institution, &a.Type, &a.Subtype, &a.Mask, &a.Balance, &a.SyncedAt, &a.Excluded, &a.NeedsReauth); e != nil {
 			rows.Close()
 			return s, e
 		}
@@ -130,16 +136,53 @@ func readState(ctx context.Context, q querier) (state, error) {
 	if e != nil {
 		return s, e
 	}
-	rows, e = q.QueryContext(ctx, "SELECT id,account_id,date::text,amount,raw_merchant,category_id,review_status,direction,COALESCE(income_stream,''),COALESCE(recurring_group_id,''),bank_pending,COALESCE(subcategory_id,'') FROM transactions ORDER BY date DESC,id")
+	rows, e = q.QueryContext(ctx, "SELECT merchant_pattern FROM ignore_rules ORDER BY merchant_pattern")
+	if e != nil {
+		return s, e
+	}
+	for rows.Next() {
+		var r ignoreRule
+		if e = rows.Scan(&r.Pattern); e != nil {
+			rows.Close()
+			return s, e
+		}
+		s.IgnoreRules = append(s.IgnoreRules, r)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return s, e
+	}
+	splits := map[string][]budget.Split{}
+	rows, e = q.QueryContext(ctx, "SELECT transaction_id,category_id,COALESCE(subcategory_id,''),amount FROM transaction_splits ORDER BY transaction_id,seq")
+	if e != nil {
+		return s, e
+	}
+	for rows.Next() {
+		var id string
+		var sp budget.Split
+		if e = rows.Scan(&id, &sp.Category, &sp.SubcategoryID, &sp.Amount); e != nil {
+			rows.Close()
+			return s, e
+		}
+		splits[id] = append(splits[id], sp)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return s, e
+	}
+	rows, e = q.QueryContext(ctx, "SELECT id,account_id,date::text,amount,raw_merchant,category_id,review_status,direction,COALESCE(income_stream,''),COALESCE(recurring_group_id,''),bank_pending,COALESCE(subcategory_id,''),note,ignored,ignore_reason FROM transactions ORDER BY date DESC,id")
 	if e != nil {
 		return s, e
 	}
 	for rows.Next() {
 		var t budget.Transaction
-		if e = rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.Amount, &t.Merchant, &t.Category, &t.Status, &t.Direction, &t.IncomeStream, &t.RecurringID, &t.BankPending, &t.SubcategoryID); e != nil {
+		if e = rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.Amount, &t.Merchant, &t.Category, &t.Status, &t.Direction, &t.IncomeStream, &t.RecurringID, &t.BankPending, &t.SubcategoryID, &t.Note, &t.Ignored, &t.IgnoreReason); e != nil {
 			rows.Close()
 			return s, e
 		}
+		t.Splits = splits[t.ID]
 		t.Suggested = "spending"
 		for _, r := range s.Rules {
 			if r.Enabled && budget.Matches(t.Merchant, r.Pattern) {
@@ -193,7 +236,16 @@ func readState(ctx context.Context, q querier) (state, error) {
 		return s, e
 	}
 	for _, t := range s.Transactions {
-		if t.Status == "confirmed" && t.Category != nil && *t.Category == "savings" && t.Direction == "out" && !t.BankPending {
+		if t.Status != "confirmed" || t.Direction != "out" || t.BankPending || t.Ignored {
+			continue
+		}
+		if len(t.Splits) > 0 {
+			for _, sp := range t.Splits {
+				if sp.Category == "savings" {
+					s.Goal.Saved += sp.Amount
+				}
+			}
+		} else if t.Category != nil && *t.Category == "savings" {
 			s.Goal.Saved += t.Amount
 			for _, l := range s.Links {
 				if l.ExpenseID == t.ID {
@@ -210,7 +262,19 @@ func readState(ctx context.Context, q querier) (state, error) {
 	if e = q.QueryRowContext(ctx, "SELECT value FROM settings WHERE key='last_sync'").Scan(&s.LastSync); e != nil {
 		return s, e
 	}
-	s.Budget = budget.Calculate(s.Transactions, s.Recurring, s.Links, s.Goal.Monthly, time.Now())
+	excluded := map[string]bool{}
+	for _, a := range s.Accounts {
+		if a.Excluded {
+			excluded[a.ID] = true
+		}
+	}
+	counted := make([]budget.Transaction, 0, len(s.Transactions))
+	for _, t := range s.Transactions {
+		if !t.Ignored && !excluded[t.AccountID] {
+			counted = append(counted, t)
+		}
+	}
+	s.Budget = budget.Calculate(counted, s.Recurring, s.Links, s.Goal.Monthly, time.Now())
 	var expensePlan, savingsPlan int64
 	for _, c := range s.Subcategories {
 		if c.Group == "expenses" {
@@ -268,6 +332,15 @@ type action struct {
 	Pattern       string            `json:"pattern"`
 	OldPattern    string            `json:"oldPattern"`
 	Enabled       bool              `json:"enabled"`
+	Note          string            `json:"note"`
+	Reason        string            `json:"reason"`
+	Always        bool              `json:"always"`
+	Splits        []budget.Split    `json:"splits"`
+	AccountID     string            `json:"accountId"`
+	Excluded      *bool             `json:"excluded"`
+	ClearReauth   bool              `json:"clearReauth"`
+	FromAccountID string            `json:"fromAccountId"`
+	Date          string            `json:"date"`
 }
 
 func validCategory(c string) bool { return c == "expenses" || c == "spending" || c == "savings" }
@@ -325,7 +398,10 @@ func apply(ctx context.Context, tx *sql.Tx, a action) error {
 		if direction == "out" {
 			a.IncomeStream = ""
 		}
-		if e := execOne(ctx, tx, "UPDATE transactions SET category_id=$1,review_status='confirmed',income_stream=NULLIF($2,''),subcategory_id=NULLIF($4,'') WHERE id=$3", a.Category, a.IncomeStream, a.TransactionID, a.SubcategoryID); e != nil {
+		if e := execOne(ctx, tx, "UPDATE transactions SET category_id=$1,review_status='confirmed',income_stream=NULLIF($2,''),subcategory_id=NULLIF($4,''),ignored=false,ignore_reason='' WHERE id=$3", a.Category, a.IncomeStream, a.TransactionID, a.SubcategoryID); e != nil {
+			return e
+		}
+		if _, e := tx.ExecContext(ctx, "DELETE FROM transaction_splits WHERE transaction_id=$1", a.TransactionID); e != nil {
 			return e
 		}
 		_, e := tx.ExecContext(ctx, "INSERT INTO rules(merchant_pattern,category_id,subcategory_id,enabled) VALUES($1,$2,NULLIF($3,''),true) ON CONFLICT(merchant_pattern) DO UPDATE SET category_id=EXCLUDED.category_id,subcategory_id=EXCLUDED.subcategory_id,enabled=true", budget.Normalize(merchant), a.Category, a.SubcategoryID)
@@ -443,6 +519,141 @@ func apply(ctx context.Context, tx *sql.Tx, a action) error {
 		return execOne(ctx, tx, "DELETE FROM rules WHERE merchant_pattern=$1", budget.Normalize(a.Pattern))
 	case "rule-toggle":
 		return execOne(ctx, tx, "UPDATE rules SET enabled=$1 WHERE merchant_pattern=$2", a.Enabled, budget.Normalize(a.Pattern))
+	case "ignore":
+		reason := strings.TrimSpace(a.Reason)
+		if len(reason) > 40 {
+			return errors.New("keep the reason under 40 characters")
+		}
+		var merchant string
+		var pending bool
+		if e := tx.QueryRowContext(ctx, "SELECT raw_merchant,bank_pending FROM transactions WHERE id=$1", a.TransactionID).Scan(&merchant, &pending); e != nil {
+			return errors.New("transaction not found")
+		}
+		if pending {
+			return errors.New("wait for this bank transaction to post")
+		}
+		if e := execOne(ctx, tx, "UPDATE transactions SET review_status='confirmed',ignored=true,ignore_reason=$2,category_id=NULL,subcategory_id=NULL WHERE id=$1", a.TransactionID, reason); e != nil {
+			return e
+		}
+		if _, e := tx.ExecContext(ctx, "DELETE FROM transaction_splits WHERE transaction_id=$1", a.TransactionID); e != nil {
+			return e
+		}
+		if a.Always {
+			pattern := budget.Normalize(merchant)
+			if len(pattern) < 2 {
+				return errors.New("this merchant is too short to ignore automatically")
+			}
+			_, e := tx.ExecContext(ctx, "INSERT INTO ignore_rules(merchant_pattern) VALUES($1) ON CONFLICT DO NOTHING", pattern)
+			return e
+		}
+		return nil
+	case "split":
+		var total int64
+		var direction string
+		var pending bool
+		if e := tx.QueryRowContext(ctx, "SELECT amount,direction,bank_pending FROM transactions WHERE id=$1 FOR UPDATE", a.TransactionID).Scan(&total, &direction, &pending); e != nil {
+			return errors.New("transaction not found")
+		}
+		if pending {
+			return errors.New("wait for this bank transaction to post")
+		}
+		if direction != "out" {
+			return errors.New("only spending can be split")
+		}
+		var linked bool
+		if e := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM reimbursement_links WHERE expense_transaction_id=$1)", a.TransactionID).Scan(&linked); e != nil {
+			return e
+		}
+		if linked {
+			return errors.New("unlink repayments before splitting this expense")
+		}
+		if len(a.Splits) < 2 || len(a.Splits) > 10 {
+			return errors.New("split into between 2 and 10 parts")
+		}
+		var sum int64
+		for _, sp := range a.Splits {
+			if sp.Amount <= 0 || !validCategory(sp.Category) {
+				return errors.New("each part needs a category and a positive amount")
+			}
+			if e := validSubcategory(ctx, tx, sp.SubcategoryID, sp.Category); e != nil {
+				return e
+			}
+			sum += sp.Amount
+		}
+		if sum != total {
+			return errors.New("splits must add up to the full amount")
+		}
+		if _, e := tx.ExecContext(ctx, "DELETE FROM transaction_splits WHERE transaction_id=$1", a.TransactionID); e != nil {
+			return e
+		}
+		for _, sp := range a.Splits {
+			if _, e := tx.ExecContext(ctx, "INSERT INTO transaction_splits(transaction_id,category_id,subcategory_id,amount) VALUES($1,$2,NULLIF($3,''),$4)", a.TransactionID, sp.Category, sp.SubcategoryID, sp.Amount); e != nil {
+				return e
+			}
+		}
+		return execOne(ctx, tx, "UPDATE transactions SET review_status='confirmed',ignored=false,ignore_reason='',category_id=NULL,subcategory_id=NULL WHERE id=$1", a.TransactionID)
+	case "note":
+		note := strings.TrimSpace(a.Note)
+		if len(note) > 500 {
+			return errors.New("keep notes under 500 characters")
+		}
+		return execOne(ctx, tx, "UPDATE transactions SET note=$2 WHERE id=$1", a.TransactionID, note)
+	case "add-savings":
+		if a.Amount <= 0 || a.Amount > 10000000000 {
+			return errors.New("enter a positive amount")
+		}
+		var exists bool
+		if e := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=$1)", a.FromAccountID).Scan(&exists); e != nil || !exists {
+			return errors.New("choose an account")
+		}
+		date := time.Now().Format("2006-01-02")
+		if a.Date != "" {
+			d, e := time.Parse("2006-01-02", a.Date)
+			if e != nil || d.After(time.Now().AddDate(0, 0, 1)) {
+				return errors.New("choose a valid date")
+			}
+			date = a.Date
+		}
+		merchant := strings.TrimSpace(a.Note)
+		if merchant == "" {
+			merchant = "added to savings"
+		}
+		if len(merchant) > 80 {
+			return errors.New("keep the label under 80 characters")
+		}
+		_, e := tx.ExecContext(ctx, "INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,category_id,review_status) VALUES($1,$2,$3,$4,$5,$6,'out','savings','confirmed')", a.ID, a.FromAccountID, date, a.Amount, merchant, budget.Normalize(merchant))
+		return e
+	case "account-settings":
+		if a.Excluded == nil && !a.ClearReauth {
+			return errors.New("nothing to change")
+		}
+		if a.Excluded != nil {
+			if e := execOne(ctx, tx, "UPDATE accounts SET excluded_from_safe=$2 WHERE id=$1", a.AccountID, *a.Excluded); e != nil {
+				return errors.New("account not found")
+			}
+		}
+		if a.ClearReauth {
+			var broken bool
+			if e := tx.QueryRowContext(ctx, "SELECT p.last_error IS NOT NULL FROM accounts a JOIN plaid_items p ON p.id=a.plaid_item_id WHERE a.id=$1", a.AccountID).Scan(&broken); e != nil {
+				return errors.New("account not found")
+			}
+			if broken {
+				return errors.New("reconnect this bank first")
+			}
+			_, e := tx.ExecContext(ctx, "UPDATE accounts SET needs_reauth=false WHERE id=$1", a.AccountID)
+			return e
+		}
+		return nil
+	case "rule-backfill":
+		pattern := budget.Normalize(a.Pattern)
+		if len(pattern) < 2 || len(pattern) > 80 || !validCategory(a.Category) {
+			return errors.New("enter a merchant and a category")
+		}
+		if e := validSubcategory(ctx, tx, a.SubcategoryID, a.Category); e != nil {
+			return e
+		}
+		_, e := tx.ExecContext(ctx, "UPDATE transactions t SET category_id=$2,subcategory_id=NULLIF($3,'') WHERE review_status='confirmed' AND direction='out' AND ignored=false AND position($1 in clean_merchant)>0 AND NOT EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id=t.id)", pattern, a.Category, a.SubcategoryID)
+		return e
 	default:
 		return errors.New("unknown action")
 	}

@@ -113,6 +113,7 @@ func (s *server) routes() http.Handler {
 	m.Handle("POST /api/actions", s.protect(s.actionHandler))
 	m.Handle("POST /api/sync", s.protect(s.syncHandler))
 	m.Handle("POST /api/plaid/link-token", s.protect(s.linkToken))
+	m.Handle("POST /api/plaid/update-token", s.protect(s.updateLinkToken))
 	m.Handle("POST /api/plaid/exchange", s.protect(s.exchange))
 	m.Handle("GET /api/push/config", s.protect(s.pushConfig))
 	m.Handle("POST /api/push/subscribe", s.protect(s.pushSubscribe))

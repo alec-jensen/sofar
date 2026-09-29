@@ -44,3 +44,15 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint text PRIMARY KEY, user_i
 CREATE TABLE IF NOT EXISTS settings (key text PRIMARY KEY, value text NOT NULL);
 INSERT INTO settings VALUES ('recurring_occurrence_threshold','3'),('last_sync','1970-01-01T00:00:00Z') ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS applied_actions (id text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS note text NOT NULL DEFAULT '';
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS ignored boolean NOT NULL DEFAULT false;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS ignore_reason text NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS transaction_splits (
+ seq bigserial PRIMARY KEY, transaction_id text NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+ category_id text NOT NULL REFERENCES categories(id), subcategory_id text REFERENCES subcategories(id) ON DELETE SET NULL,
+ amount bigint NOT NULL CHECK(amount>0)
+);
+CREATE INDEX IF NOT EXISTS transaction_splits_tx_idx ON transaction_splits(transaction_id);
+CREATE TABLE IF NOT EXISTS ignore_rules (merchant_pattern text PRIMARY KEY);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS excluded_from_safe boolean NOT NULL DEFAULT false;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS needs_reauth boolean NOT NULL DEFAULT false;
