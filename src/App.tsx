@@ -163,10 +163,7 @@ export default function App() {
     [pushEnabled, setPushEnabled] = useState(false),
     [totpEnabled, setTotpEnabled] = useState(false),
     [hapticsEnabled, setHapticsEnabled] = useState(() => localStorage.getItem("sofar-haptics") !== "off"),
-    [motionMode, setMotionMode] = useState<MotionMode>(() => {
-      const saved = localStorage.getItem("sofar-motion");
-      return saved === "calm" || saved === "off" ? saved : "expressive";
-    });
+    [motionMode, setMotionMode] = useState<MotionMode>(() => (localStorage.getItem("sofar-motion") === "off" ? "off" : "expressive"));
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("all"),
     [accountFilter, setAccountFilter] = useState("all"),
@@ -587,6 +584,27 @@ export default function App() {
   const depositSheetDrag = useSheetDrag(depositSheet, () => setDepositSheet(false));
   const linkSheetDrag = useSheetDrag(linkSheet, () => setLinkSheet(false));
   useSheetFocus(reviewPicker || historyFiltersOpen || ignoreSheet || splitSheet || depositSheet || linkSheet);
+  useEffect(() => {
+    if (page !== "Review inbox" || modal || reviewPicker || historyFiltersOpen || ignoreSheet || splitSheet || depositSheet || linkSheet)
+      return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+      if ((e.target as HTMLElement).closest("input,textarea,select,[contenteditable]")) return;
+      e.preventDefault();
+      if (swipeCurrent) {
+        if (e.key === "ArrowRight") reviewSwipe.confirm(true);
+        else setReviewPicker(true);
+      } else if (swipeRecurring) {
+        if (e.key === "ArrowRight") {
+          const form = document.querySelector<HTMLFormElement>(".recurring-review form");
+          if (!form?.checkValidity()) form?.reportValidity();
+          else form.requestSubmit();
+        } else recurringEdit(swipeRecurring);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [page, modal, reviewPicker, historyFiltersOpen, ignoreSheet, splitSheet, depositSheet, linkSheet, swipeCurrent, swipeRecurring, reviewSwipe, recurringEdit]);
   if (auth === "loading")
     return (
       <div className="loading">
@@ -1770,17 +1788,16 @@ export default function App() {
                 <h2>your devices & security</h2>
                 <div className="setting-line">
                   <div><strong>motion</strong><p>springy movement when you tap, swipe, and open a sheet. your device’s reduced-motion setting takes precedence.</p></div>
-                  <div className="segmented" role="radiogroup" aria-label="motion style" data-active={(["expressive", "calm", "off"] as MotionMode[]).indexOf(motionMode)}>
-                    {(["expressive", "calm", "off"] as MotionMode[]).map(m => (
-                      <button key={m} type="button" role="radio" aria-checked={motionMode === m} data-h="tick" className={motionMode === m ? "active" : ""} onClick={() => { setMotionMode(m); localStorage.setItem("sofar-motion", m); }}>{m}</button>
-                    ))}
+                  <div className="segmented" role="radiogroup" aria-label="motion style" data-active={motionMode === "expressive" ? 0 : 1}>
+                    <button type="button" role="radio" aria-checked={motionMode === "expressive"} data-h="tick" className={motionMode === "expressive" ? "active" : ""} onClick={() => { setMotionMode("expressive"); localStorage.setItem("sofar-motion", "expressive"); }}>on</button>
+                    <button type="button" role="radio" aria-checked={motionMode === "off"} data-h="tick" className={motionMode === "off" ? "active" : ""} onClick={() => { setMotionMode("off"); localStorage.setItem("sofar-motion", "off"); }}>off</button>
                   </div>
                 </div>
                 <div className="setting-line">
                   <div><strong>touch feedback</strong><p>distinct pulses for presses, choices, swipes, sheets, and confirmations on supported devices. visual ripples show feedback elsewhere.</p></div>
                   <span className="setting-actions">
                     <button className="button small-button" type="button" data-h="success" disabled={!hapticsEnabled} aria-label="test touch feedback">feel it</button>
-                    <div className="segmented segmented-2" role="radiogroup" aria-label="touch feedback" data-active={hapticsEnabled ? 0 : 1}>
+                    <div className="segmented" role="radiogroup" aria-label="touch feedback" data-active={hapticsEnabled ? 0 : 1}>
                       <button type="button" role="radio" aria-checked={hapticsEnabled} data-h="manual" className={hapticsEnabled ? "active" : ""} onClick={event => { if (hapticsEnabled) return; setHapticEnabled(true); emitHaptic("toggle", { x: event.clientX, y: event.clientY }); setHapticsEnabled(true); localStorage.setItem("sofar-haptics", "on"); }}>on</button>
                       <button type="button" role="radio" aria-checked={!hapticsEnabled} data-h="manual" className={!hapticsEnabled ? "active" : ""} onClick={event => { if (!hapticsEnabled) return; emitHaptic("toggleOff", { x: event.clientX, y: event.clientY }); setHapticsEnabled(false); setHapticEnabled(false); localStorage.setItem("sofar-haptics", "off"); }}>off</button>
                     </div>

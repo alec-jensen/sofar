@@ -1,4 +1,4 @@
-export type MotionMode = "expressive" | "calm" | "off";
+export type MotionMode = "expressive" | "off";
 export type HapticName = "key" | "tick" | "tension" | "grab" | "tap" | "press" | "sheet" | "sheetClose" | "threshold" | "unarm" | "toggle" | "toggleOff" | "success" | "soft" | "thud" | "error";
 type Pulse = [gap: number, duration: number, strength: number];
 
@@ -46,11 +46,10 @@ function spring(stiffness: number, damping: number) {
 
 export function configureMotion(mode: MotionMode) {
   motionMode = mode;
-  const calm = mode === "calm";
   const tokens = {
-    fast: spring(800, calm ? .9 : .6),
-    def: spring(380, calm ? .95 : .72),
-    slow: spring(200, calm ? 1 : .8),
+    fast: spring(800, .6),
+    def: spring(380, .72),
+    slow: spring(200, .8),
     fx: spring(1600, 1),
   };
   const root = document.documentElement;
@@ -75,7 +74,7 @@ export function playPageEntrance(page: string) {
   };
   const scope = document.querySelector("main");
   const items = Array.from(scope?.querySelectorAll<HTMLElement>(selectors[page] || ".page-heading,.card,.summary-strip") || []);
-  const spatial = spring(200, motionMode === "calm" ? 1 : .8);
+  const spatial = spring(200, .8);
   const effects = spring(1600, 1);
   items.slice(0, 16).forEach((element, index) => {
     const delay = 80 + index * 55;
