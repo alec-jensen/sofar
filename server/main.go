@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -31,6 +32,7 @@ type server struct {
 	origin                 string
 	production, trustProxy bool
 	bridgeHosts            []string
+	proxyNets              []netip.Prefix
 	globalFails            int
 	globalUntil            time.Time
 	encryption             cipher.AEAD
@@ -85,6 +87,12 @@ func main() {
 	seedDone()
 	s := &server{db: d, origin: origin, production: production, trustProxy: os.Getenv("TRUST_PROXY") == "true", encryption: aead, client: newOutboundClient(), bridgeHosts: bridgeHostsFromEnv(), attempts: map[string]attempt{}}
 	httpServer := &http.Server{Addr: env("SOFAR_ADDR", "127.0.0.1:8080"), Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	if s.proxyNets, err = parseProxyNets(os.Getenv("TRUSTED_PROXIES")); err != nil {
+		log.Fatal().Msg(err.Error())
+	}
+	if s.trustProxy && len(s.proxyNets) == 0 {
+		log.Warn().Msg("TRUST_PROXY is on without TRUSTED_PROXIES: any client that can reach this port can claim to be the proxy. Set TRUSTED_PROXIES to your proxy's address, or keep the port on loopback.")
+	}
 	go s.poll(ctx)
 	go func() {
 		<-ctx.Done()
@@ -169,7 +177,7 @@ func (s *server) routes() http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' otpauth:")
 		if s.production {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
-			if r.TLS == nil && !(s.trustProxy && r.Header.Get("X-Forwarded-Proto") == "https") {
+			if r.TLS == nil && !(s.proxyTrusted(r) && r.Header.Get("X-Forwarded-Proto") == "https") {
 				fail(w, 400, "HTTPS is required.")
 				return
 			}

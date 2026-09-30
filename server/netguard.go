@@ -108,6 +108,51 @@ func (s *server) bridgeHostOK(host string) bool {
 	return false
 }
 
+// parseProxyNets reads TRUSTED_PROXIES: a comma-separated list of addresses or
+// CIDR ranges (for example "100.100.63.10" or "100.64.0.0/10").
+func parseProxyNets(raw string) ([]netip.Prefix, error) {
+	var nets []netip.Prefix
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(part); err == nil {
+			nets = append(nets, p.Masked())
+			continue
+		}
+		ip, err := netip.ParseAddr(part)
+		if err != nil {
+			return nil, errors.New("TRUSTED_PROXIES has an entry that is not an address or CIDR range: " + part)
+		}
+		nets = append(nets, netip.PrefixFrom(ip.Unmap(), ip.Unmap().BitLen()))
+	}
+	return nets, nil
+}
+
+// proxyTrusted reports whether forwarding headers (X-Forwarded-For and
+// X-Forwarded-Proto) may be believed for this request. That needs TRUST_PROXY,
+// and, when TRUSTED_PROXIES is set, the connection must come from one of those
+// addresses. Otherwise anyone who can reach the port could claim to be the proxy.
+func (s *server) proxyTrusted(r *http.Request) bool {
+	if !s.trustProxy {
+		return false
+	}
+	if len(s.proxyNets) == 0 {
+		return true
+	}
+	peer, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	for _, n := range s.proxyNets {
+		if n.Contains(peer.Addr().Unmap()) {
+			return true
+		}
+	}
+	return false
+}
+
 // clientIP is the address used for rate limiting. Behind a trusted reverse
 // proxy every connection arrives from the proxy, so the caller's address is the
 // last X-Forwarded-For entry (the one the proxy itself appended). This assumes
@@ -117,7 +162,7 @@ func (s *server) clientIP(r *http.Request) string {
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	if s.trustProxy {
+	if s.proxyTrusted(r) {
 		parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
 		for i := len(parts) - 1; i >= 0; i-- {
 			if ip, e := netip.ParseAddr(strings.TrimSpace(parts[i])); e == nil {

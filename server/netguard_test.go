@@ -103,3 +103,53 @@ func TestRateLimitIsPerCallerNotPerProxy(t *testing.T) {
 		t.Fatal("a successful login clears that caller's failures")
 	}
 }
+
+func TestTrustedProxiesLimitWhoMayVouchForHTTPSAndAddress(t *testing.T) {
+	nets, err := parseProxyNets("100.100.63.10, 10.0.0.0/8, fd00::/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &server{origin: "https://money.example.com", production: true, trustProxy: true, proxyNets: nets}
+	req := func(remote string) *http.Request {
+		r := httptest.NewRequest("GET", "/api/nope", nil)
+		r.RemoteAddr = remote
+		r.Header.Set("X-Forwarded-Proto", "https")
+		r.Header.Set("X-Forwarded-For", "198.51.100.7")
+		return r
+	}
+	for remote, wantTrusted := range map[string]bool{
+		"100.100.63.10:4000": true, "10.9.8.7:1": true, "[fd12::1]:2": true,
+		"100.100.63.11:4000": false, "203.0.113.5:80": false, "192.168.1.5:1": false,
+	} {
+		if got := s.proxyTrusted(req(remote)); got != wantTrusted {
+			t.Errorf("proxyTrusted(%s) = %v, want %v", remote, got, wantTrusted)
+		}
+	}
+	// A trusted proxy can vouch for HTTPS and supply the caller's address...
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, req("100.100.63.10:4000"))
+	if w.Code != 404 {
+		t.Fatalf("a request via the trusted proxy should reach the app, got %d", w.Code)
+	}
+	if got := s.clientIP(req("100.100.63.10:4000")); got != "198.51.100.7" {
+		t.Errorf("the trusted proxy's caller address should be used, got %s", got)
+	}
+	// ...but anyone else who reaches the port directly cannot.
+	w = httptest.NewRecorder()
+	s.routes().ServeHTTP(w, req("203.0.113.5:80"))
+	if w.Code != 400 {
+		t.Fatalf("a direct connection claiming HTTPS must be refused, got %d", w.Code)
+	}
+	if got := s.clientIP(req("203.0.113.5:80")); got != "203.0.113.5" {
+		t.Errorf("a direct caller must not be able to choose its own address, got %s", got)
+	}
+}
+
+func TestParseProxyNetsRejectsGarbage(t *testing.T) {
+	if _, err := parseProxyNets("100.100.63.10, not-an-ip"); err == nil {
+		t.Error("an invalid entry must be an error, not silently ignored")
+	}
+	if nets, err := parseProxyNets(""); err != nil || len(nets) != 0 {
+		t.Error("empty means no restriction")
+	}
+}

@@ -30,7 +30,7 @@ Requires Docker Compose, a domain pointing to your host, and a TLS reverse proxy
 
    For the setup key and database password, use the same command with `'base64url'` instead of `'base64'`. Run it separately for every secret. Keep `.env` private and retain the encryption key in your backup; it is needed to decrypt bank access tokens and authenticator secrets.
 
-3. Set `SOFAR_ORIGIN` to the exact public HTTPS origin, without a trailing slash. Set `TZ` to your budget timezone. Set `TRUST_PROXY=true` only when traffic comes through your trusted reverse proxy. The Compose service publishes the backend on loopback only.
+3. Set `SOFAR_ORIGIN` to the exact public HTTPS origin, without a trailing slash. Set `TZ` to your budget timezone. Set `TRUST_PROXY=true` only when traffic comes through your trusted reverse proxy. The Compose service publishes the backend on loopback only by default. If the proxy runs on **another machine** (for example over a VPN such as NetBird or Tailscale), set `SOFAR_BIND` to an address it can reach (`0.0.0.0` for all interfaces, or the VPN address) **and** set `TRUSTED_PROXIES` to the proxy's address or a CIDR range (for example `100.100.63.10`). Only connections from those addresses can then vouch for HTTPS or supply the caller's IP; anyone else who reaches the port directly is treated as a plain HTTP client and refused. Docker's own firewall rules bypass `ufw` for published ports, so do not publish on `0.0.0.0` without `TRUSTED_PROXIES`, and confirm the port is not reachable from outside your network.
 4. Generate your Web Push keypair:
 
    ```sh

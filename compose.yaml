@@ -24,7 +24,9 @@ services:
       DATABASE_URL: postgres://sofar:${POSTGRES_PASSWORD}@db:5432/sofar?sslmode=disable
       SOFAR_ADDR: 0.0.0.0:8080
     ports:
-      - "127.0.0.1:8080:8080"
+      # Loopback by default. If your reverse proxy is on another machine, set SOFAR_BIND
+      # (for example 0.0.0.0) and TRUSTED_PROXIES in .env; see the README.
+      - "${SOFAR_BIND:-127.0.0.1}:8080:8080"
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
