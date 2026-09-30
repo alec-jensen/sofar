@@ -8,3 +8,5 @@ test-results/
 *.tsbuildinfo
 Sofar personal budgeting PWA.zip
 design-reference/
+.env.local
+.env.*.local

@@ -4,6 +4,8 @@ COPY package*.json ./
 RUN npm ci
 COPY index.html tsconfig.json vite.config.ts ./
 COPY src ./src
+# the app and the server share one merchant directory
+COPY internal/budget/merchants.json ./internal/budget/merchants.json
 COPY public ./public
 RUN npm run build
 

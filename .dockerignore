@@ -6,3 +6,6 @@ dist
 *.log
 test-results
 .cache
+.env.local
+.env.*.local
+go-server.log

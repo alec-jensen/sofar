@@ -7,7 +7,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"github.com/alec-jensen/sofar/internal/db"
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
 	"github.com/pquerna/otp/totp"
@@ -16,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +53,9 @@ func TestFullFlow(t *testing.T) {
 	defer database.Close()
 	block, _ := aes.NewCipher(make([]byte, 32))
 	aead, _ := cipher.NewGCM(block)
+	if e = seedDefaults(context.Background(), database); e != nil {
+		t.Fatal(e)
+	}
 	s := &server{db: database, encryption: aead, origin: "http://sofar.test", client: &http.Client{Timeout: 10 * time.Second}, attempts: map[string]attempt{}}
 	handler := s.routes()
 	var cookie *http.Cookie
@@ -80,7 +86,7 @@ func TestFullFlow(t *testing.T) {
 		t.Fatal("unsafe session cookie")
 	}
 	call("/api/state", "", 200)
-	if _, e = database.Exec(`INSERT INTO plaid_items(id,access_token,institution_name,kind) VALUES('item','token','Test Bank','transactions'); INSERT INTO accounts(id,plaid_item_id,plaid_account_id,institution_name,account_type,account_subtype,display_name) VALUES('a','item','a','Test Bank','depository','checking','Checking'),('b','item','b','Other Bank','depository','savings','Savings'); INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,category_id,review_status) VALUES('expense','a','2026-08-01',10000,'Dinner','dinner','out','spending','confirmed'),('credit','b','2026-08-03',4000,'Venmo','venmo','in',NULL,'pending');`); e != nil {
+	if _, e = database.Exec(`INSERT INTO accounts(id,connection_id,external_id,institution_name,account_type,account_subtype,display_name) VALUES('a','conn1','acct-a','Test Bank','depository','checking','Checking'),('b','conn2','acct-b','Other Bank','depository','savings','Savings'); INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,category_id,review_status) VALUES('expense','a','2026-08-01',10000,'Dinner','dinner','out','spending','confirmed'),('credit','b','2026-08-03',4000,'Venmo','venmo','in',NULL,'pending');`); e != nil {
 		t.Fatal(e)
 	}
 	repayment := `{"id":"offline-action-001","type":"reimburse","expenseId":"expense","creditId":"credit","amount":4000}`
@@ -118,49 +124,93 @@ func TestFullFlow(t *testing.T) {
 	if e = database.QueryRow("SELECT subcategory_id FROM transactions WHERE id='expense'").Scan(&assigned); e != nil || assigned.Valid {
 		t.Fatal("deleting a category must leave transactions unassigned", e, assigned)
 	}
-	// Provider fixtures exercise real pagination and SQL writes without a bank connection.
-	t.Setenv("PLAID_CLIENT_ID", "fixture")
-	t.Setenv("PLAID_SECRET", "fixture")
-	pages := 0
-	reauth := false
-	plaid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// A fake SimpleFIN Bridge exercises claiming, history backfill, pending
+	// reconciliation, and connection errors without contacting a bank.
+	day := func(n int) int64 { return time.Now().AddDate(0, 0, -n).Unix() }
+	requests := 0
+	reauth, phase2 := false, false
+	sfin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/accounts/get":
-			if reauth {
-				w.WriteHeader(400)
-				io.WriteString(w, `{"error_code":"ITEM_LOGIN_REQUIRED","error_message":"login required"}`)
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/claim/used":
+			w.WriteHeader(403)
+		case r.Method == "POST" && r.URL.Path == "/claim/good":
+			io.WriteString(w, "https://sofar:secret@"+r.Host+"/simplefin")
+		case r.URL.Path == "/simplefin/accounts":
+			if user, pass, ok := r.BasicAuth(); !ok || user != "sofar" || pass != "secret" {
+				w.WriteHeader(403)
 				return
 			}
-			io.WriteString(w, `{"accounts":[{"account_id":"a","name":"Checking","type":"depository","subtype":"checking","mask":"1234","balances":{"current":1000,"iso_currency_code":"USD"}}]}`)
-		case "/transactions/sync":
-			pages++
-			var req map[string]any
-			json.NewDecoder(r.Body).Decode(&req)
-			if req["cursor"] == "" {
-				io.WriteString(w, `{"added":[{"transaction_id":"plaid1","account_id":"a","date":"2026-08-01","amount":15,"name":"NETFLIX.COM","iso_currency_code":"USD"}],"modified":[],"removed":[],"next_cursor":"page2","has_more":true}`)
-			} else if req["cursor"] == "done" {
-				io.WriteString(w, `{"added":[{"transaction_id":"plaid4","account_id":"a","date":"2026-08-20","amount":15,"name":"NETFLIX.COM","iso_currency_code":"USD"}],"modified":[],"removed":[],"next_cursor":"done2","has_more":false}`)
-			} else {
-				io.WriteString(w, `{"added":[{"transaction_id":"plaid2","account_id":"a","date":"2026-07-01","amount":15,"name":"Netflix 07/01","iso_currency_code":"USD"},{"transaction_id":"plaid3","account_id":"a","date":"2026-06-01","amount":15,"name":"Netflix 06/01","iso_currency_code":"USD"}],"modified":[],"removed":[],"next_cursor":"done","has_more":false}`)
+			requests++
+			start, _ := strconv.ParseInt(r.URL.Query().Get("start-date"), 10, 64)
+			end, _ := strconv.ParseInt(r.URL.Query().Get("end-date"), 10, 64)
+			type tx struct {
+				id, name string
+				when     int64
+				pending  bool
 			}
+			all := []tx{{"nf1", "NETFLIX.COM", day(10), false}, {"nf2", "Netflix 07/01", day(40), false}, {"nf3", "Netflix 06/01", day(70), false}}
+			if phase2 {
+				all = append(all, tx{"nf4", "NETFLIX.COM", day(2), false})
+			} else {
+				all = append(all, tx{"hold", "Corner Store", day(1), true})
+			}
+			items := []string{}
+			for _, x := range all {
+				if x.when < start || x.when >= end || (x.pending && r.URL.Query().Get("pending") != "1") {
+					continue
+				}
+				posted := x.when
+				if x.pending {
+					posted = 0
+				}
+				items = append(items, fmt.Sprintf(`{"id":"%s","posted":%d,"transacted_at":%d,"amount":"-15.00","description":"%s","pending":%t}`, x.id, posted, x.when, x.name, x.pending))
+			}
+			buy := ""
+			if day(3) >= start && day(3) < end {
+				buy = fmt.Sprintf(`{"id":"buy","posted":%d,"amount":"-100.00","description":"BUY VTI"}`, day(3))
+			}
+			errlist := "[]"
+			if reauth {
+				errlist = `[{"code":"con.auth","msg":"Test Bank needs you to sign in again.","conn_id":"conn1"}]`
+			}
+			fmt.Fprintf(w, `{"errlist":%s,"connections":[{"conn_id":"conn1","name":"Test Bank","org_id":"test","sfin_url":"https://%s"}],"accounts":[{"id":"acct-a","name":"Checking","conn_id":"conn1","currency":"USD","balance":"1000.00","balance-date":%d,"transactions":[%s]},{"id":"acct-brokerage","name":"Roth IRA","conn_id":"conn1","currency":"USD","balance":"5000.25","balance-date":%d,"transactions":[%s]}]}`, errlist, r.Host, day(0), strings.Join(items, ","), day(0), buy)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
-	defer plaid.Close()
-	s.plaidBase = plaid.URL
-	if _, e = database.Exec("UPDATE plaid_items SET access_token=$1 WHERE id='item'", s.seal("test-token")); e != nil {
-		t.Fatal(e)
+	defer sfin.Close()
+	s.client = sfin.Client()
+	token := func(path string) string { return base64.StdEncoding.EncodeToString([]byte(sfin.URL + path)) }
+	syncNow := func(want int) {
+		t.Helper()
+		// SimpleFIN asks for spaced-out requests; tests skip the wait.
+		database.Exec("UPDATE simplefin SET last_fetch=NULL")
+		call("/api/sync", `{}`, want)
+	}
+	call("/api/sync", `{}`, 502)
+	call("/api/simplefin/connect", `{"token":"not a token"}`, 400)
+	call("/api/simplefin/connect", `{"token":"`+token("/claim/used")+`"}`, 400)
+	call("/api/simplefin/connect", `{"token":"`+token("/claim/good")+`"}`, 200)
+	if requests != 3 {
+		t.Fatalf("first sync should read recent data plus history until empty: %d requests", requests)
+	}
+	var sealedAccess string
+	if e = database.QueryRow("SELECT access_url FROM simplefin").Scan(&sealedAccess); e != nil || strings.Contains(sealedAccess, "secret") {
+		t.Fatal("access URL must be stored encrypted", e)
 	}
 	call("/api/sync", `{}`, 200)
-	if pages != 2 {
-		t.Fatalf("wanted 2 pages, got %d", pages)
+	if requests != 3 {
+		t.Fatal("a sync right after another must not call SimpleFIN again")
 	}
-	var cursor string
-	database.QueryRow("SELECT cursor FROM plaid_items WHERE id='item'").Scan(&cursor)
-	if cursor != "done" {
-		t.Fatal("cursor not committed")
+	var brokerageTx int
+	if e = database.QueryRow("SELECT count(*) FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE a.account_type='investment'").Scan(&brokerageTx); e != nil || brokerageTx != 0 {
+		t.Fatal("investment accounts should track balances only", e, brokerageTx)
+	}
+	var pendingHold int
+	database.QueryRow("SELECT count(*) FROM transactions WHERE id='a:hold' AND bank_pending=true").Scan(&pendingHold)
+	if pendingHold != 1 {
+		t.Fatal("pending transaction was not imported")
 	}
 	var candidates int
 	database.QueryRow("SELECT count(*) FROM recurring_groups WHERE confirmed=false").Scan(&candidates)
@@ -207,29 +257,29 @@ func TestFullFlow(t *testing.T) {
 		return nil
 	}
 	// notes
-	call("/api/actions", `{"id":"offline-action-020","type":"note","transactionId":"plaid1","note":"keep the receipt"}`, 200)
-	if findTx("plaid1")["note"] != "keep the receipt" {
+	call("/api/actions", `{"id":"offline-action-020","type":"note","transactionId":"a:nf1","note":"keep the receipt"}`, 200)
+	if findTx("a:nf1")["note"] != "keep the receipt" {
 		t.Fatal("note did not persist")
 	}
 	call("/api/actions", `{"id":"offline-action-021","type":"note","transactionId":"missing","note":"x"}`, 400)
 	// ignore, with an always-ignore rule
-	call("/api/actions", `{"id":"offline-action-022","type":"ignore","transactionId":"plaid1","reason":"not mine","always":true}`, 200)
-	if x := findTx("plaid1"); x["ignored"] != true || x["status"] != "confirmed" || x["ignoreReason"] != "not mine" || x["category"] != nil {
+	call("/api/actions", `{"id":"offline-action-022","type":"ignore","transactionId":"a:nf1","reason":"not mine","always":true}`, 200)
+	if x := findTx("a:nf1"); x["ignored"] != true || x["status"] != "confirmed" || x["ignoreReason"] != "not mine" || x["category"] != nil {
 		t.Fatalf("ignore did not apply: %v", x)
 	}
 	if rules := getState()["ignoreRules"].([]any); len(rules) != 1 || rules[0].(map[string]any)["pattern"] != "netflix" {
 		t.Fatalf("always-ignore rule missing: %v", rules)
 	}
 	// re-reviewing clears ignore
-	call("/api/actions", `{"id":"offline-action-023","type":"review","transactionId":"plaid1","category":"expenses"}`, 200)
-	if findTx("plaid1")["ignored"] == true {
+	call("/api/actions", `{"id":"offline-action-023","type":"review","transactionId":"a:nf1","category":"expenses"}`, 200)
+	if findTx("a:nf1")["ignored"] == true {
 		t.Fatal("review must clear ignore")
 	}
 	// splits
-	call("/api/actions", `{"id":"offline-action-024","type":"split","transactionId":"plaid2","splits":[{"category":"spending","amount":1000},{"category":"savings","amount":499}]}`, 400)
-	call("/api/actions", `{"id":"offline-action-025","type":"split","transactionId":"plaid2","splits":[{"category":"spending","amount":1500}]}`, 400)
-	call("/api/actions", `{"id":"offline-action-026","type":"split","transactionId":"plaid2","splits":[{"category":"spending","amount":1000},{"category":"savings","amount":500}]}`, 200)
-	if x := findTx("plaid2"); x["category"] != nil || len(x["splits"].([]any)) != 2 || x["status"] != "confirmed" {
+	call("/api/actions", `{"id":"offline-action-024","type":"split","transactionId":"a:nf2","splits":[{"category":"spending","amount":1000},{"category":"savings","amount":499}]}`, 400)
+	call("/api/actions", `{"id":"offline-action-025","type":"split","transactionId":"a:nf2","splits":[{"category":"spending","amount":1500}]}`, 400)
+	call("/api/actions", `{"id":"offline-action-026","type":"split","transactionId":"a:nf2","splits":[{"category":"spending","amount":1000},{"category":"savings","amount":500}]}`, 200)
+	if x := findTx("a:nf2"); x["category"] != nil || len(x["splits"].([]any)) != 2 || x["status"] != "confirmed" {
 		t.Fatalf("split did not apply: %v", x)
 	}
 	call("/api/actions", `{"id":"offline-action-027","type":"split","transactionId":"credit","splits":[{"category":"spending","amount":2000},{"category":"savings","amount":2000}]}`, 400)
@@ -244,6 +294,28 @@ func TestFullFlow(t *testing.T) {
 	if got := getState()["goal"].(map[string]any)["saved"].(float64); got != savedBefore+2500 {
 		t.Fatalf("saved total %v want %v", got, savedBefore+2500)
 	}
+	// only manual entries can be deleted
+	call("/api/actions", `{"id":"offline-action-040","type":"delete-transaction","transactionId":"a:nf1"}`, 400)
+	call("/api/actions", `{"id":"offline-action-041","type":"delete-transaction","transactionId":"offline-action-028"}`, 200)
+	if got := getState()["goal"].(map[string]any)["saved"].(float64); got != savedBefore {
+		t.Fatalf("deleting a deposit must remove it from savings: %v want %v", got, savedBefore)
+	}
+	// sorting one review item can sort every waiting one from that merchant
+	if _, e = database.Exec(`INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction) VALUES('uber1','a','2026-08-05',900,'Uber 063015','uber','out'),('uber2','a','2026-08-06',1100,'Uber 072515','uber','out')`); e != nil {
+		t.Fatal(e)
+	}
+	call("/api/actions", `{"id":"offline-action-042","type":"review","transactionId":"uber1","category":"spending","always":true}`, 200)
+	if x := findTx("uber2"); x["status"] != "confirmed" || x["category"] != "spending" {
+		t.Fatalf("review-all did not sort matching merchant: %v", x)
+	}
+	// manual bills are confirmed immediately and count toward commitments
+	call("/api/actions", `{"id":"offline-action-043","type":"recurring-create","merchant":"Phone","amount":4500,"cadence":"monthly","nextDate":"2026-10-07","category":"expenses","tolerance":10}`, 200)
+	call("/api/actions", `{"id":"offline-action-044","type":"recurring-create","merchant":"Phone","amount":0,"cadence":"monthly","nextDate":"2026-10-07"}`, 400)
+	if bills := getState()["budget"].(map[string]any)["bills"].(float64); bills < 4500 {
+		t.Fatalf("manual bill not counted: %v", bills)
+	}
+	// renaming an account survives later syncs
+	call("/api/actions", `{"id":"offline-action-045","type":"account-settings","accountId":"a","name":"Bills account"}`, 200)
 	// backfill a rule onto past transactions
 	call("/api/actions", `{"id":"offline-action-030","type":"rule-backfill","pattern":"dinner","category":"savings"}`, 200)
 	if findTx("expense")["category"] != "savings" {
@@ -266,19 +338,94 @@ func TestFullFlow(t *testing.T) {
 	call("/api/actions", `{"id":"offline-action-033","type":"account-settings","accountId":"a","excluded":false}`, 200)
 	// a broken bank connection flags reconnect, cannot be cleared by hand, and heals on the next good sync
 	reauth = true
-	call("/api/sync", `{}`, 502)
-	if accountA()["needsReauth"] != true {
+	syncNow(200)
+	if accountA()["needsReauth"] != true || accountA()["problem"] != "Test Bank needs you to sign in again." {
 		t.Fatal("login-required error must flag the account for reconnect")
 	}
 	call("/api/actions", `{"id":"offline-action-034","type":"account-settings","accountId":"a","clearReauth":true}`, 400)
-	reauth = false
-	call("/api/sync", `{}`, 200)
+	reauth, phase2 = false, true
+	syncNow(200)
+	database.QueryRow("SELECT count(*) FROM transactions WHERE id='a:hold'").Scan(&pendingHold)
+	if pendingHold != 0 {
+		t.Fatal("a pending transaction that vanished should be removed")
+	}
 	if accountA()["needsReauth"] == true {
 		t.Fatal("successful sync must clear the reconnect flag")
 	}
 	// always-ignored merchants are skipped on ingest
-	if x := findTx("plaid4"); x["ignored"] != true || x["status"] != "confirmed" {
+	if x := findTx("a:nf4"); x["ignored"] != true || x["status"] != "confirmed" {
 		t.Fatalf("ingest should auto-ignore: %v", x)
+	}
+	if name := accountA()["name"]; name != "Bills account" {
+		t.Fatalf("sync overwrote the account nickname: %v", name)
+	}
+	// changing an account's type and hiding it
+	call("/api/actions", `{"id":"offline-action-046","type":"account-settings","accountId":"a","accountType":"credit"}`, 200)
+	if accountA()["type"] != "credit" {
+		t.Fatal("account type change did not persist")
+	}
+	var brokerage string
+	if e = database.QueryRow("SELECT id FROM accounts WHERE external_id='acct-brokerage'").Scan(&brokerage); e != nil {
+		t.Fatal(e)
+	}
+	call("/api/actions", `{"id":"offline-action-047","type":"account-remove","accountId":"`+brokerage+`"}`, 200)
+	syncNow(200)
+	for _, x := range getState()["accounts"].([]any) {
+		if x.(map[string]any)["id"] == brokerage {
+			t.Fatal("a removed account must stay hidden after syncing")
+		}
+	}
+	// suggestions: money moved between your own accounts, and the merchant directory
+	if _, e = database.Exec(`INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction) VALUES('move-out','a','2026-09-10',25000,'Transfer to Share 01','transfer to share','out'),('move-in','b','2026-09-11',25000,'Transfer from Share 30','transfer from share','in'),('burger','a','2026-09-12',1136,'Whataburger','whataburger','out'),('payday','a','2026-09-12',120000,'ACME PAYROLL','acme payroll','in')`); e != nil {
+		t.Fatal(e)
+	}
+	if x := findTx("move-out"); x["suggested"] != "savings" || x["suggestedSubcategoryId"] != "savings-account" || x["suggestionNote"] != "moved to savings" {
+		t.Fatalf("transfer to savings should be suggested as savings: %v", x)
+	}
+	if x := findTx("move-in"); x["suggestedIncomeStream"] != "transfer" {
+		t.Fatalf("the receiving side should be a transfer: %v", x)
+	}
+	if x := findTx("burger"); x["suggested"] != "spending" || x["suggestedSubcategoryId"] != "dining" {
+		t.Fatalf("directory should sort Whataburger as dining: %v", x)
+	}
+	if x := findTx("payday"); x["suggestedIncomeStream"] != "salary" {
+		t.Fatalf("payroll should be suggested as salary: %v", x)
+	}
+	call("/api/actions", `{"id":"offline-action-049","type":"review","transactionId":"payday","category":"spending","incomeStream":"other"}`, 200)
+	var payerRules int
+	database.QueryRow("SELECT count(*) FROM rules WHERE merchant_pattern='acme payroll'").Scan(&payerRules)
+	if payerRules != 0 {
+		t.Fatal("confirming a deposit must not create a spending rule for the payer")
+	}
+	call("/api/actions", `{"id":"offline-action-050","type":"review","transactionId":"burger","category":"spending"}`, 200)
+	if _, e = database.Exec(`INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,category_id,review_status) VALUES('tacos','a','2026-09-13',1500,'Torchy''s Tacos','torchy s tacos','out','spending','confirmed')`); e != nil {
+		t.Fatal(e)
+	}
+	call("/api/actions", `{"id":"offline-action-051","type":"auto-categorize"}`, 200)
+	if x := findTx("tacos"); x["subcategoryId"] != "dining" {
+		t.Fatalf("auto-categorize should fill in dining for a merchant without a rule: %v", x)
+	}
+	if x := findTx("burger"); x["subcategoryId"] != nil {
+		t.Fatalf("a rule that says just the group must not be overridden: %v", x)
+	}
+	if x := findTx("burger"); x["suggestedSubcategoryId"] != nil {
+		t.Fatalf("suggestions must follow the user's group-only rule: %v", x)
+	}
+	var seeded int
+	database.QueryRow("SELECT count(*) FROM subcategories WHERE id IN ('groceries','dining','gas','investing')").Scan(&seeded)
+	if seeded != 4 {
+		t.Fatal("default categories were not seeded")
+	}
+	// disconnecting SimpleFIN removes imported data but keeps entries added by hand
+	call("/api/actions", `{"id":"offline-action-048","type":"add-savings","amount":1000,"fromAccountId":"a","note":"kept"}`, 200)
+	call("/api/simplefin/disconnect", `{}`, 200)
+	if st := getState(); st["connection"].(map[string]any)["connected"] == true || len(st["accounts"].([]any)) != 0 {
+		t.Fatalf("disconnect left the connection or accounts behind: %v", st["connection"])
+	}
+	var imported, kept int
+	database.QueryRow("SELECT count(*) FILTER (WHERE manual=false), count(*) FILTER (WHERE manual=true) FROM transactions").Scan(&imported, &kept)
+	if imported != 0 || kept == 0 {
+		t.Fatalf("disconnect should drop imported transactions only: imported=%d kept=%d", imported, kept)
 	}
 	endpoint := "https://fcm.googleapis.com/fcm/send/test-subscription"
 	if _, e = database.Exec("INSERT INTO push_subscriptions(endpoint,user_id,keys) VALUES($1,1,'{}')", endpoint); e != nil {
@@ -306,4 +453,14 @@ func TestFullFlow(t *testing.T) {
 	response = call("/api/auth/login", `{"username":"test","password":"a long test password","code":"`+code+`"}`, 200)
 	cookie = response.Result().Cookies()[0]
 	call("/api/state", "", 200)
+	// two-step verification can be turned off with the password and a current code
+	call("/api/auth/totp/disable", `{"password":"wrong password","code":"`+code+`"}`, 401)
+	call("/api/auth/totp/disable", `{"password":"a long test password","code":"`+code+`"}`, 200)
+	// changing the password keeps this session and requires the new one next time
+	call("/api/auth/password", `{"current":"a long test password","next":"short"}`, 400)
+	call("/api/auth/password", `{"current":"a long test password","next":"a different long password"}`, 200)
+	call("/api/state", "", 200)
+	call("/api/auth/logout", `{}`, 200)
+	call("/api/auth/login", `{"username":"test","password":"a long test password"}`, 401)
+	call("/api/auth/login", `{"username":"test","password":"a different long password"}`, 200)
 }

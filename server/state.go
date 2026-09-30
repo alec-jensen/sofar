@@ -24,6 +24,13 @@ type account struct {
 	SyncedAt    string `json:"syncedAt"`
 	Excluded    bool   `json:"excludedFromSafeToSpend,omitempty"`
 	NeedsReauth bool   `json:"needsReauth,omitempty"`
+	Problem     string `json:"problem,omitempty"`
+}
+type connectionStatus struct {
+	Connected bool   `json:"connected"`
+	BridgeURL string `json:"bridgeUrl,omitempty"`
+	LastFetch string `json:"lastFetch,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 type ignoreRule struct {
 	Pattern string `json:"pattern"`
@@ -60,6 +67,7 @@ type state struct {
 	LastSync      string               `json:"lastSync"`
 	Demo          bool                 `json:"demo"`
 	Budget        budget.Baseline      `json:"budget"`
+	Connection    connectionStatus     `json:"connection"`
 }
 type querier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -102,13 +110,13 @@ func readState(ctx context.Context, q querier) (state, error) {
 	if e != nil {
 		return s, e
 	}
-	rows, e = q.QueryContext(ctx, "SELECT id,display_name,institution_name,account_type,account_subtype,mask,balance,COALESCE(to_char(last_synced_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),''),excluded_from_safe,needs_reauth FROM accounts ORDER BY account_type,id")
+	rows, e = q.QueryContext(ctx, "SELECT a.id,COALESCE(NULLIF(a.nickname,''),a.display_name),a.institution_name,a.account_type,a.account_subtype,a.mask,a.balance,COALESCE(to_char(a.last_synced_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),''),a.excluded_from_safe,a.needs_reauth,COALESCE(c.last_error,'') FROM accounts a LEFT JOIN connections c ON c.id=a.connection_id WHERE a.removed=false ORDER BY a.account_type,a.id")
 	if e != nil {
 		return s, e
 	}
 	for rows.Next() {
 		var a account
-		if e = rows.Scan(&a.ID, &a.Name, &a.Institution, &a.Type, &a.Subtype, &a.Mask, &a.Balance, &a.SyncedAt, &a.Excluded, &a.NeedsReauth); e != nil {
+		if e = rows.Scan(&a.ID, &a.Name, &a.Institution, &a.Type, &a.Subtype, &a.Mask, &a.Balance, &a.SyncedAt, &a.Excluded, &a.NeedsReauth, &a.Problem); e != nil {
 			rows.Close()
 			return s, e
 		}
@@ -172,25 +180,17 @@ func readState(ctx context.Context, q querier) (state, error) {
 	if e != nil {
 		return s, e
 	}
-	rows, e = q.QueryContext(ctx, "SELECT id,account_id,date::text,amount,raw_merchant,category_id,review_status,direction,COALESCE(income_stream,''),COALESCE(recurring_group_id,''),bank_pending,COALESCE(subcategory_id,''),note,ignored,ignore_reason FROM transactions ORDER BY date DESC,id")
+	rows, e = q.QueryContext(ctx, "SELECT id,account_id,date::text,amount,raw_merchant,category_id,review_status,direction,COALESCE(income_stream,''),COALESCE(recurring_group_id,''),bank_pending,COALESCE(subcategory_id,''),note,ignored,ignore_reason,manual,description FROM transactions ORDER BY date DESC,id")
 	if e != nil {
 		return s, e
 	}
 	for rows.Next() {
 		var t budget.Transaction
-		if e = rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.Amount, &t.Merchant, &t.Category, &t.Status, &t.Direction, &t.IncomeStream, &t.RecurringID, &t.BankPending, &t.SubcategoryID, &t.Note, &t.Ignored, &t.IgnoreReason); e != nil {
+		if e = rows.Scan(&t.ID, &t.AccountID, &t.Date, &t.Amount, &t.Merchant, &t.Category, &t.Status, &t.Direction, &t.IncomeStream, &t.RecurringID, &t.BankPending, &t.SubcategoryID, &t.Note, &t.Ignored, &t.IgnoreReason, &t.Manual, &t.Description); e != nil {
 			rows.Close()
 			return s, e
 		}
 		t.Splits = splits[t.ID]
-		t.Suggested = "spending"
-		for _, r := range s.Rules {
-			if r.Enabled && budget.Matches(t.Merchant, r.Pattern) {
-				t.Suggested = r.Category
-				t.SuggestedSubcategoryID = r.SubcategoryID
-				break
-			}
-		}
 		s.Transactions = append(s.Transactions, t)
 	}
 	e = rows.Err()
@@ -254,6 +254,19 @@ func readState(ctx context.Context, q querier) (state, error) {
 			}
 		}
 	}
+	var sealed, bridge string
+	var lastFetch sql.NullTime
+	var lastError sql.NullString
+	switch e = q.QueryRowContext(ctx, "SELECT access_url,bridge_url,last_fetch,last_error FROM simplefin WHERE id=1").Scan(&sealed, &bridge, &lastFetch, &lastError); {
+	case e == nil:
+		s.Connection = connectionStatus{Connected: true, BridgeURL: bridge, Error: lastError.String}
+		if lastFetch.Valid {
+			s.Connection.LastFetch = lastFetch.Time.UTC().Format(time.RFC3339)
+		}
+	case !errors.Is(e, sql.ErrNoRows):
+		return s, e
+	}
+	suggest(&s)
 	var threshold string
 	if e = q.QueryRowContext(ctx, "SELECT value FROM settings WHERE key='recurring_occurrence_threshold'").Scan(&threshold); e != nil {
 		return s, e
@@ -341,6 +354,11 @@ type action struct {
 	ClearReauth   bool              `json:"clearReauth"`
 	FromAccountID string            `json:"fromAccountId"`
 	Date          string            `json:"date"`
+	Name          *string           `json:"name"`
+	Merchant      string            `json:"merchant"`
+	Cadence       string            `json:"cadence"`
+	AccountType   string            `json:"accountType"`
+	NextDate      string            `json:"nextDate"`
 }
 
 func validCategory(c string) bool { return c == "expenses" || c == "spending" || c == "savings" }
@@ -385,7 +403,7 @@ func apply(ctx context.Context, tx *sql.Tx, a action) error {
 		if pending {
 			return errors.New("wait for this bank transaction to post")
 		}
-		if a.IncomeStream != "" && a.IncomeStream != "salary" && a.IncomeStream != "self-employed" && a.IncomeStream != "transfer" {
+		if a.IncomeStream != "" && a.IncomeStream != "salary" && a.IncomeStream != "self-employed" && a.IncomeStream != "transfer" && a.IncomeStream != "other" {
 			return errors.New("choose a valid income type")
 		}
 		var linked bool
@@ -393,7 +411,7 @@ func apply(ctx context.Context, tx *sql.Tx, a action) error {
 			return e
 		}
 		if direction == "in" && a.IncomeStream == "" && !linked {
-			return errors.New("classify incoming money as salary, self-employed, transfer, or a repayment")
+			return errors.New("classify incoming money as a paycheck, self-employed, other income, a transfer, or a repayment")
 		}
 		if direction == "out" {
 			a.IncomeStream = ""
@@ -404,14 +422,30 @@ func apply(ctx context.Context, tx *sql.Tx, a action) error {
 		if _, e := tx.ExecContext(ctx, "DELETE FROM transaction_splits WHERE transaction_id=$1", a.TransactionID); e != nil {
 			return e
 		}
+		if direction == "out" {
+			// A bill's category follows the latest choice for its merchant.
+			if _, e := tx.ExecContext(ctx, "UPDATE recurring_groups SET category_id=$1 WHERE type='bill' AND (id=(SELECT recurring_group_id FROM transactions WHERE id=$2) OR merchant_pattern=$3)", a.Category, a.TransactionID, budget.Normalize(merchant)); e != nil {
+				return e
+			}
+		}
+		if a.Always {
+			// Sort every other waiting transaction from the same merchant the same way.
+			if _, e := tx.ExecContext(ctx, "UPDATE transactions t SET category_id=$1,review_status='confirmed',income_stream=NULLIF($2,''),subcategory_id=NULLIF($3,''),ignored=false,ignore_reason='' WHERE review_status='pending' AND bank_pending=false AND direction=$4 AND clean_merchant=$5 AND id<>$6 AND NOT EXISTS(SELECT 1 FROM reimbursement_links l WHERE l.reimbursement_transaction_id=t.id)", a.Category, a.IncomeStream, a.SubcategoryID, direction, budget.Normalize(merchant), a.TransactionID); e != nil {
+				return e
+			}
+		}
+		if direction != "out" {
+			// Sorting rules are for spending; who pays you is remembered from your income choices.
+			return nil
+		}
 		_, e := tx.ExecContext(ctx, "INSERT INTO rules(merchant_pattern,category_id,subcategory_id,enabled) VALUES($1,$2,NULLIF($3,''),true) ON CONFLICT(merchant_pattern) DO UPDATE SET category_id=EXCLUDED.category_id,subcategory_id=EXCLUDED.subcategory_id,enabled=true", budget.Normalize(merchant), a.Category, a.SubcategoryID)
 		return e
 	case "reimburse":
 		var expense, credit, used int64
 		var cat sql.NullString
 		var expenseDate, creditDate time.Time
-		if e := tx.QueryRowContext(ctx, "SELECT amount,category_id,date FROM transactions WHERE id=$1 AND direction='out' AND review_status='confirmed' AND bank_pending=false FOR UPDATE", a.ExpenseID).Scan(&expense, &cat, &expenseDate); e != nil {
-			return errors.New("choose a confirmed expense")
+		if e := tx.QueryRowContext(ctx, "SELECT amount,category_id,date FROM transactions t WHERE id=$1 AND direction='out' AND review_status='confirmed' AND bank_pending=false AND ignored=false AND NOT EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id=t.id) FOR UPDATE", a.ExpenseID).Scan(&expense, &cat, &expenseDate); e != nil {
+			return errors.New("choose a confirmed expense that isn't ignored or split")
 		}
 		if e := tx.QueryRowContext(ctx, "SELECT amount,date FROM transactions WHERE id=$1 AND direction='in' AND bank_pending=false FOR UPDATE", a.CreditID).Scan(&credit, &creditDate); e != nil {
 			return errors.New("choose an incoming credit")
@@ -543,7 +577,10 @@ func apply(ctx context.Context, tx *sql.Tx, a action) error {
 			if len(pattern) < 2 {
 				return errors.New("this merchant is too short to ignore automatically")
 			}
-			_, e := tx.ExecContext(ctx, "INSERT INTO ignore_rules(merchant_pattern) VALUES($1) ON CONFLICT DO NOTHING", pattern)
+			if _, e := tx.ExecContext(ctx, "INSERT INTO ignore_rules(merchant_pattern) VALUES($1) ON CONFLICT DO NOTHING", pattern); e != nil {
+				return e
+			}
+			_, e := tx.ExecContext(ctx, "UPDATE transactions SET review_status='confirmed',ignored=true,ignore_reason=$2,category_id=NULL,subcategory_id=NULL WHERE review_status='pending' AND bank_pending=false AND clean_merchant=$1", pattern, reason)
 			return e
 		}
 		return nil
@@ -621,11 +658,52 @@ func apply(ctx context.Context, tx *sql.Tx, a action) error {
 		if len(merchant) > 80 {
 			return errors.New("keep the label under 80 characters")
 		}
-		_, e := tx.ExecContext(ctx, "INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,category_id,review_status) VALUES($1,$2,$3,$4,$5,$6,'out','savings','confirmed')", a.ID, a.FromAccountID, date, a.Amount, merchant, budget.Normalize(merchant))
+		_, e := tx.ExecContext(ctx, "INSERT INTO transactions(id,account_id,date,amount,raw_merchant,clean_merchant,direction,category_id,review_status,manual) VALUES($1,$2,$3,$4,$5,$6,'out','savings','confirmed',true)", a.ID, a.FromAccountID, date, a.Amount, merchant, budget.Normalize(merchant))
 		return e
 	case "account-settings":
-		if a.Excluded == nil && !a.ClearReauth {
+		if a.AccountType != "" {
+			subtype := map[string]string{"checking": "checking", "savings": "savings", "credit": "credit card", "investment": "brokerage"}[a.AccountType]
+			kind := map[string]string{"checking": "depository", "savings": "depository", "credit": "credit", "investment": "investment"}[a.AccountType]
+			if kind == "" {
+				return errors.New("choose checking, savings, credit, or investment")
+			}
+			var previous string
+			if e := tx.QueryRowContext(ctx, "SELECT account_type FROM accounts WHERE id=$1 AND removed=false", a.AccountID).Scan(&previous); e != nil {
+				return errors.New("account not found")
+			}
+			if e := execOne(ctx, tx, "UPDATE accounts SET account_type=$2,account_subtype=$3 WHERE id=$1", a.AccountID, kind, subtype); e != nil {
+				return e
+			}
+			if kind == "investment" && previous != "investment" {
+				// Investment accounts track balances only; their buys, sells, and sweeps aren't spending.
+				if _, e := tx.ExecContext(ctx, "UPDATE transactions SET review_status='pending',category_id=NULL,subcategory_id=NULL,income_stream=NULL WHERE id IN (SELECT l.reimbursement_transaction_id FROM reimbursement_links l JOIN transactions t ON t.id=l.expense_transaction_id WHERE t.account_id=$1 AND t.manual=false)", a.AccountID); e != nil {
+					return e
+				}
+				if _, e := tx.ExecContext(ctx, "DELETE FROM transactions WHERE account_id=$1 AND manual=false", a.AccountID); e != nil {
+					return e
+				}
+			}
+			if previous == "investment" && kind != "investment" {
+				// Bring the account's history in on the next sync.
+				if _, e := tx.ExecContext(ctx, "UPDATE simplefin SET backfilled=false,last_fetch=NULL"); e != nil {
+					return e
+				}
+			}
+			if a.Excluded == nil && !a.ClearReauth && a.Name == nil {
+				return nil
+			}
+		}
+		if a.Excluded == nil && !a.ClearReauth && a.Name == nil {
 			return errors.New("nothing to change")
+		}
+		if a.Name != nil {
+			name := strings.TrimSpace(*a.Name)
+			if len(name) > 60 {
+				return errors.New("keep account names under 60 characters")
+			}
+			if e := execOne(ctx, tx, "UPDATE accounts SET nickname=NULLIF($2,'') WHERE id=$1", a.AccountID, name); e != nil {
+				return errors.New("account not found")
+			}
 		}
 		if a.Excluded != nil {
 			if e := execOne(ctx, tx, "UPDATE accounts SET excluded_from_safe=$2 WHERE id=$1", a.AccountID, *a.Excluded); e != nil {
@@ -634,16 +712,68 @@ func apply(ctx context.Context, tx *sql.Tx, a action) error {
 		}
 		if a.ClearReauth {
 			var broken bool
-			if e := tx.QueryRowContext(ctx, "SELECT p.last_error IS NOT NULL FROM accounts a JOIN plaid_items p ON p.id=a.plaid_item_id WHERE a.id=$1", a.AccountID).Scan(&broken); e != nil {
+			if e := tx.QueryRowContext(ctx, "SELECT COALESCE(c.last_error,'')<>'' FROM accounts a LEFT JOIN connections c ON c.id=a.connection_id WHERE a.id=$1", a.AccountID).Scan(&broken); e != nil {
 				return errors.New("account not found")
 			}
 			if broken {
-				return errors.New("reconnect this bank first")
+				return errors.New("fix this bank's connection in SimpleFIN Bridge first")
 			}
 			_, e := tx.ExecContext(ctx, "UPDATE accounts SET needs_reauth=false WHERE id=$1", a.AccountID)
 			return e
 		}
 		return nil
+	case "delete-transaction":
+		var manual bool
+		if e := tx.QueryRowContext(ctx, "SELECT manual FROM transactions WHERE id=$1", a.TransactionID).Scan(&manual); e != nil {
+			return errors.New("transaction not found")
+		}
+		if !manual {
+			return errors.New("only entries you added yourself can be deleted; ignore bank transactions instead")
+		}
+		if e := unlinkForTransaction(ctx, tx, a.TransactionID); e != nil {
+			return e
+		}
+		return execOne(ctx, tx, "DELETE FROM transactions WHERE id=$1", a.TransactionID)
+	case "account-remove":
+		// SimpleFIN keeps sending the account, so it is hidden rather than deleted.
+		if e := execOne(ctx, tx, "UPDATE accounts SET removed=true WHERE id=$1 AND removed=false", a.AccountID); e != nil {
+			return errors.New("account not found")
+		}
+		if _, e := tx.ExecContext(ctx, "UPDATE transactions SET review_status='pending',category_id=NULL,subcategory_id=NULL,income_stream=NULL WHERE id IN (SELECT l.reimbursement_transaction_id FROM reimbursement_links l JOIN transactions t ON t.id=l.expense_transaction_id WHERE t.account_id=$1 AND t.manual=false)", a.AccountID); e != nil {
+			return e
+		}
+		_, e := tx.ExecContext(ctx, "DELETE FROM transactions WHERE account_id=$1 AND manual=false", a.AccountID)
+		return e
+	case "auto-categorize":
+		return autoCategorize(ctx, tx)
+	case "recurring-create":
+		merchant := strings.TrimSpace(a.Merchant)
+		pattern := budget.Normalize(merchant)
+		if len(pattern) < 2 || len(merchant) > 80 {
+			return errors.New("enter a name for this bill")
+		}
+		if a.Amount <= 0 || a.Amount > 10000000000 {
+			return errors.New("enter a positive amount")
+		}
+		if a.Cadence != "weekly" && a.Cadence != "biweekly" && a.Cadence != "monthly" && a.Cadence != "annual" {
+			return errors.New("choose how often it repeats")
+		}
+		if !validCategory(a.Category) {
+			a.Category = "expenses"
+		}
+		next, e := time.Parse("2006-01-02", a.NextDate)
+		if e != nil {
+			return errors.New("choose the next due date")
+		}
+		if a.Tolerance < 0 || a.Tolerance > 100 {
+			return errors.New("use a tolerance between 0 and 100")
+		}
+		var threshold int
+		if e = tx.QueryRowContext(ctx, "SELECT value::int FROM settings WHERE key='recurring_occurrence_threshold'").Scan(&threshold); e != nil {
+			return e
+		}
+		_, e = tx.ExecContext(ctx, `INSERT INTO recurring_groups(id,merchant_pattern,expected_amount,amount_tolerance_pct,cadence,type,occurrence_threshold_at_creation,category_id,next_date,confirmed) VALUES($1,$2,$3,$4,$5,'bill',$6,$7,$8,true) ON CONFLICT(merchant_pattern,type) DO UPDATE SET expected_amount=EXCLUDED.expected_amount,amount_tolerance_pct=EXCLUDED.amount_tolerance_pct,cadence=EXCLUDED.cadence,category_id=EXCLUDED.category_id,next_date=EXCLUDED.next_date,confirmed=true,dismissed=false,mismatch=false`, a.ID, pattern, a.Amount, a.Tolerance, a.Cadence, threshold, a.Category, next)
+		return e
 	case "rule-backfill":
 		pattern := budget.Normalize(a.Pattern)
 		if len(pattern) < 2 || len(pattern) > 80 || !validCategory(a.Category) {

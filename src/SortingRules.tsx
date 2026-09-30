@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Plus, X } from "lucide-react";
 import { normalize, type Action, type Category, type State } from "./model";
+import { knownMerchantCount, lookupMerchant } from "./merchants";
 import { useSheetFocus } from "./useSheetFocus";
 import { useSheetDrag } from "./useSheetDrag";
 
@@ -12,6 +13,17 @@ export default function SortingRules({ state, onBack, onAction }: { state: State
   const [deleteStep, setDeleteStep] = useState(false);
   const [saving, setSaving] = useState(false);
   const [applyPast, setApplyPast] = useState(false);
+  const [probe, setProbe] = useState("");
+  const probeResult = (() => {
+    const n = normalize(probe);
+    if (n.length < 2) return null;
+    const rule = [...state.rules].sort((a, b) => b.pattern.length - a.pattern.length).find(r => r.enabled !== false && (n.includes(r.pattern) || r.pattern.includes(n)));
+    const name = (group: Category, sub?: string) => (state.subcategories || []).find(c => c.id === sub)?.name || state.categories[group];
+    if (rule) return { label: name(rule.category, rule.subcategoryId), why: `your rule for “${rule.pattern}”` };
+    const found = lookupMerchant(probe);
+    if (found) return { label: name(found.group, (state.subcategories || []).some(c => c.id === found.sub) ? found.sub : undefined), why: found.name ? `sofar knows ${found.name}` : "from words in the name" };
+    return { label: state.categories.spending, why: "no match yet, so it’s a guess you’ll review" };
+  })();
   const suggestions = (() => {
     const groups = new Map<string, { merchant: string; category: Category; subcategoryId?: string; count: number }>();
     for (const t of state.transactions) {
@@ -86,7 +98,11 @@ export default function SortingRules({ state, onBack, onAction }: { state: State
         <button className={`design-rule-switch ${rule.enabled === false ? "" : "on"}`} data-h={rule.enabled === false ? "toggle" : "toggleOff"} role="switch" aria-checked={rule.enabled !== false} aria-label={`${rule.enabled === false ? "enable" : "disable"} rule for ${rule.pattern}`} onClick={() => onAction({ type: "rule-toggle", pattern: rule.pattern, enabled: rule.enabled === false }, rule.enabled === false ? "Rule enabled." : "Rule paused.")}><span /></button>
       </div>;
     }) : <p className="design-category-empty">no rules yet. make one for a merchant you recognize, or confirm a transaction to teach sofar.</p>}</div>
-    <div className="design-rules-fallback"><span>everything else</span><strong>→ we guess, you review</strong></div>
+    <div className="design-rules-fallback"><span>everything else</span><strong>→ sofar’s directory, then we guess and you review</strong></div>
+    <section className="rule-tester">
+      <label className="design-sheet-field">test a merchant<input value={probe} maxLength={80} onChange={event => setProbe(event.target.value)} placeholder="e.g. whataburger, h-e-b, google fi" /></label>
+      {probeResult ? <p><strong>→ {probeResult.label}</strong> <span>{probeResult.why}</span></p> : <p>sofar recognizes {knownMerchantCount} merchants and hundreds of words like “pharmacy” or “car wash”. your rules always win.</p>}
+    </section>
     {draft && <div className="design-sheet-backdrop" data-closing={sheet.closing} onClick={sheet.close}><div className="design-sheet" role="dialog" aria-modal="true" aria-label={draft.oldPattern ? "edit sorting rule" : "new sorting rule"} data-dragging={sheet.dragging} style={sheet.style} {...sheet.handlers} onClick={event => event.stopPropagation()}>
       <div className="history-sheet-handle" />
       <div className="design-sheet-title"><h2>{draft.oldPattern ? "edit rule" : "new rule"}</h2><button aria-label="close" data-h="sheetClose" onClick={sheet.close}><X size={20} /></button></div>

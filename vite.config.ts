@@ -1,9 +1,15 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // The Go server's settings live in .env / .env.local; read the SOFAR_ ones so
+  // the dev proxy targets the same address and sends the origin it expects.
+  const env = { ...loadEnv(mode, process.cwd(), "SOFAR_"), ...process.env };
+  const api = env.SOFAR_DEV_API || "http://127.0.0.1:8080";
+  const origin = env.SOFAR_ORIGIN || "http://localhost:8080";
+  return {
   plugins: [
     react(),
     {
@@ -28,12 +34,14 @@ export default defineConfig({
     },
   ],
   server: {
+    watch: { ignored: ["**/.kilo/**"] },
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8080",
-        configure: (proxy) => proxy.on("proxyReq", (request) => request.setHeader("origin", process.env.SOFAR_ORIGIN || "http://localhost:8080")),
+        target: api,
+        configure: (proxy) => proxy.on("proxyReq", (request) => request.setHeader("origin", origin)),
       },
     },
   },
   build: { outDir: "dist" },
+  };
 });

@@ -16,3 +16,4 @@ import "./minimal.css";
 import "./dashboard-refresh.css";
 import "./buy.css";
 import "./design-match.css";
+import "./features.css";

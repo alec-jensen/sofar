@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowRight, CircleHelp, Heart, Landmark, Sprout, TrendingUp } from "lucide-react";
 import { budget, money, type State } from "./model";
+import { spendingGuide } from "./Dashboard";
 import { debtPayoff, emergencyRunway, investmentGrowth, monthsToSave } from "./calculatorMath";
 
 type Tool = "savings" | "emergency" | "debt" | "investing";
@@ -31,7 +32,7 @@ function RangeAmount({ id, label, value, max, step, onChange }: { id: string; la
   </div>;
 }
 
-export default function Calculators({ state, onBuy, onSetup }: { state: State; onBuy: () => void; onSetup?: (page: "Categories" | "Sorting rules" | "Recurring" | "Accounts" | "Settings") => void }) {
+export default function Calculators({ state, onBuy, onSetup }: { state: State; onBuy: (saved?: { item: string; price: number }) => void; onSetup?: (page: "Categories" | "Sorting rules" | "Recurring" | "Accounts" | "Settings") => void }) {
   const [tool, setTool] = useState<Tool | null>(null);
   const [savedPurchases, setSavedPurchases] = useState<{ item: string; price: number; date: string }[]>(() => {
     try {
@@ -68,8 +69,8 @@ export default function Calculators({ state, onBuy, onSetup }: { state: State; o
     { id: "investing", label: "investment growth", icon: TrendingUp },
   ];
   return <div className="calc-layout">
-    <button className="calc-buy-link" onClick={onBuy}>
-      <span><strong>should i buy this?</strong><small>check a price against today’s {money(Math.round((budget(state).safe - budget(state).totals.spending) / (new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate() - new Date().getDate() + 1)))} before you tap pay</small></span>
+    <button className="calc-buy-link" onClick={() => onBuy()}>
+      <span><strong>should i buy this?</strong><small>{spendingGuide(state).noBaseline ? "see how a price compares with your month" : `check a price against today’s ${money(spendingGuide(state).perDay)} before you tap pay`}</small></span>
       <span className="calc-buy-input">what’s it cost? <ArrowRight size={17} /></span>
     </button>
     <span className="calc-section-label">calculators</span>
@@ -143,13 +144,13 @@ export default function Calculators({ state, onBuy, onSetup }: { state: State; o
     </div>
     {savedPurchases.length > 0 && <>
       <span className="calc-section-label">saved for later</span>
-      <div className="calc-saved-list">{savedPurchases.map((saved, index) => <div key={`${saved.date}-${index}`}><span><strong>{saved.item}</strong><small>{money(saved.price, true)} · saved {new Date(saved.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }).toLowerCase()}</small></span><button aria-label={`remove ${saved.item}`} onClick={() => { const next = savedPurchases.filter((_, i) => i !== index); setSavedPurchases(next); localStorage.setItem("sofar-sleep-list", JSON.stringify(next)); }}>remove</button></div>)}</div>
+      <div className="calc-saved-list">{savedPurchases.map((saved, index) => <div key={`${saved.date}-${index}`}><span><strong>{saved.item}</strong><small>{money(saved.price, true)} · saved {new Date(saved.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }).toLowerCase()}</small></span><button aria-label={`check ${saved.item} again`} onClick={() => onBuy({ item: saved.item, price: saved.price })}>check again</button><button aria-label={`remove ${saved.item}`} onClick={() => { const next = savedPurchases.filter((_, i) => i !== index); setSavedPurchases(next); localStorage.setItem("sofar-sleep-list", JSON.stringify(next)); }}>remove</button></div>)}</div>
     </>}
     <span className="calc-section-label">setup</span>
     <div className="calc-setup-links">
       <button onClick={() => onSetup?.("Categories")}><span><strong>categories</strong><small>{(state.subcategories || []).length} {(state.subcategories || []).length === 1 ? "category" : "categories"} across three groups</small></span><ArrowRight size={18} /></button>
       <button onClick={() => onSetup?.("Sorting rules")}><span><strong>sorting rules</strong><small>{state.rules.length} {state.rules.length === 1 ? "rule" : "rules"} from your reviews</small></span><ArrowRight size={18} /></button>
-      <button onClick={() => onSetup?.("Recurring")}><span><strong>recurring</strong><small>check what’s already set aside</small></span><ArrowRight size={18} /></button>
+      <button onClick={() => onSetup?.("Recurring")}><span><strong>subscriptions & recurring</strong><small>{state.recurring.filter(r => r.confirmed && !r.dismissed && r.type === "bill").length} tracked · see what’s coming up</small></span><ArrowRight size={18} /></button>
       <button onClick={() => onSetup?.("Accounts")}><span><strong>accounts</strong><small>connections and balances</small></span><ArrowRight size={18} /></button>
       <button onClick={() => onSetup?.("Settings")}><span><strong>settings</strong><small>preferences and security</small></span><ArrowRight size={18} /></button>
     </div>

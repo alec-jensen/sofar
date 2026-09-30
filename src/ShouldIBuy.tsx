@@ -8,9 +8,9 @@ import { investmentProjection } from "./purchaseMath";
 
 const decimal = (value: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 
-export default function ShouldIBuy({ state, onExplore, onDone, onSleep }: { state: State; onExplore?: () => void; onDone?: () => void; onSleep?: (item: string, price: number) => void }) {
-  const [item, setItem] = useState("new headphones");
-  const [priceText, setPriceText] = useState("180");
+export default function ShouldIBuy({ state, onExplore, onDone, onSleep, initial }: { state: State; onExplore?: () => void; onDone?: () => void; onSleep?: (item: string, price: number) => void; initial?: { item: string; price: number } }) {
+  const [item, setItem] = useState(initial?.item ?? "");
+  const [priceText, setPriceText] = useState(initial ? String(initial.price / 100) : "");
   const [rate, setRate] = useState(7);
   const n = Number(priceText);
   const price = priceText.trim() && Number.isFinite(n) && n >= .01 && n <= 1_000_000 ? Math.round(n * 100) : null;
@@ -51,7 +51,7 @@ export default function ShouldIBuy({ state, onExplore, onDone, onSleep }: { stat
         <section className="design-buy-impact">
           <div><span>of your {money(guide.left)} left this month</span><strong>{share === null ? "—" : <><RollingNumber value={share} format={value => String(Math.round(value))} />%</>}</strong></div>
           <div className="design-buy-track"><span style={{ width: `${Math.min(100, Math.max(0, share || 0))}%` }} /></div>
-          <p>{price === null ? "add a price to see how it fits." : after! >= 0 ? `fits. you’d have ${money(after!)} left this month, about ${money(perDayAfter!)} a day.` : `this would put the month ${money(Math.abs(after!))} over your current spending plan.`}</p>
+          <p>{price === null ? "add a price to see how it fits." : guide.noBaseline ? "sofar needs a full month of income history before it can say how this fits your month." : after! >= 0 ? `fits. you’d have ${money(after!)} left this month, about ${money(perDayAfter!)} a day.` : `this would put the month ${money(Math.abs(after!))} over your current spending plan.`}</p>
         </section>
       </div>
       <section className="design-buy-invest">

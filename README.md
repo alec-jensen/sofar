@@ -39,7 +39,7 @@ Requires Docker Compose, a domain pointing to your host, and a TLS reverse proxy
 
    Or build the image and run `docker compose run --rm --no-deps app vapid`. Put both returned keys in `.env`, and set `VAPID_SUBJECT` to your contact `mailto:` address. Keep the private key stable across deployments.
 
-5. Add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV=sandbox`. Switch to `production` only after configuring the appropriate Plaid account/products. The app does not assume any particular Plaid plan or production entitlement.
+5. Sign up for [SimpleFIN Bridge](https://bridge.simplefin.org) (a flat $15/year at the time of writing), connect your banks there, and create a **setup token**. You paste it into sofar after signing in (onboarding or **Accounts**); no bank or SimpleFIN credentials go in `.env`. Remove any old `PLAID_*` variables.
 6. Start the stack:
 
    ```sh
@@ -68,7 +68,7 @@ $env:TRUST_PROXY = 'false'
 go run ./server
 ```
 
-Run `npm run dev` in another terminal. The Vite dev server proxies `/api` to the Go process and rewrites the request `Origin` to `SOFAR_ORIGIN` (default `http://localhost:8080`), so the exact-origin check passes whichever port you browse. Point `DATABASE_URL` at your local Postgres. To serve the built frontend from Go instead, `npm run build`, set `SOFAR_ORIGIN=http://localhost:8080` and `SOFAR_ENV=development`, and visit the Go server at that origin. Development explicitly allows HTTP with a non-Secure session cookie; production does not.
+Run `npm run dev` in another terminal. The Vite dev server proxies `/api` to the Go process at `SOFAR_DEV_API` (default `http://127.0.0.1:8080`) and rewrites the request `Origin` to `SOFAR_ORIGIN` (default `http://localhost:8080`). Vite reads both from the environment or from `.env` / `.env.local`, so set `SOFAR_ORIGIN` to the address you browse (for example `http://127.0.0.1:5173`) and `SOFAR_DEV_API` to wherever `SOFAR_ADDR` listens if it isn't port 8080. Point `DATABASE_URL` at your local Postgres. To serve the built frontend from Go instead, `npm run build`, set `SOFAR_ORIGIN=http://localhost:8080` and `SOFAR_ENV=development`, and visit the Go server at that origin. Development explicitly allows HTTP with a non-Secure session cookie; production does not.
 
 Without Go installed, `docker compose up -d --build` runs the whole stack (Postgres, the API, and the built frontend) at `http://localhost:8080` using the values in `.env` (set `SOFAR_ENV=development`, `SOFAR_ORIGIN=http://localhost:8080`, and `TRUST_PROXY=false` for local HTTP). `docker compose down -v` resets the database.
 
@@ -91,18 +91,31 @@ Without Go installed, `docker compose up -d --build` runs the whole stack (Postg
 - **Split** divides one posted outgoing transaction across two to ten category parts that must add up to its exact amount. Split transactions cannot carry linked repayments; a material change from the bank (amount or direction) clears the split and sends it back for review.
 - **Notes** are free text (up to 500 characters) stored with the transaction.
 - **Add money** on the goal page records a manual outgoing Savings transaction from a chosen account, which counts toward goal progress like any other savings transaction.
-- **Accounts** can be excluded from safe-to-spend; excluded accounts' transactions do not feed income, bills, or spending. Accounts whose bank needs a new sign-in (Plaid `ITEM_LOGIN_REQUIRED`, pending expiration, or revoked permission, from a failed sync or webhook) are flagged for reconnect; **sign in again** opens Plaid Link in update mode via `/api/plaid/update-token`, and the next successful sync clears the flag.
+- **Accounts** can be excluded from safe-to-spend; excluded accounts' transactions do not feed income, bills, or spending. When SimpleFIN reports that a bank needs attention (for example a changed password), the account shows SimpleFIN's message with a link to fix it in SimpleFIN Bridge, and the next successful sync clears the flag.
 - **Sorting rules** can apply to past matching outgoing transactions ("fix past ones too"). Rules still only suggest categories for new transactions.
+- **Sort all from a merchant**: confirming a review card can also confirm every other waiting transaction from the same merchant with the same category (on by default when there are others). "Always ignore" likewise ignores matching transactions already waiting.
+- **Manual bills** can be added on the Recurring page; they are confirmed immediately and count as commitments. Due dates roll forward by cadence for display.
+- **Manual entries** (goal deposits) can be deleted; bank transactions can only be ignored.
+- **Accounts** can be renamed (the name survives syncs), retyped (checking, savings, credit card, or investment), or removed from sofar, which hides the account and deletes its imported transactions. **Disconnect** on the Accounts page forgets the SimpleFIN access and deletes all imported accounts and transactions; rules, categories, bills, and entries you added by hand stay.
+- **Settings** can change the password (signing out other sessions) and turn off two-step verification with the password and a current code. Enrollment shows a QR code.
 
-## Plaid and sync
+## SimpleFIN and sync
 
-Bank Link initializes Transactions with **730 days requested**, and optionally Investments where supported. Investment-only accounts have a separate Link action requiring Investments. Checking/savings/investment filtering is confined to integration logic; stored account type/subtype values are generic.
+sofar reads your banks through [SimpleFIN Bridge](https://www.simplefin.org/protocol.html). Paste a setup token once; sofar claims it, stores the resulting access URL **encrypted** (AES-256-GCM), and never shows it again. One connection covers every bank linked in SimpleFIN Bridge. Access is read-only.
 
-Initial sync consumes every available `/transactions/sync` page from the empty cursor, then uses the saved cursor for incremental updates. It processes added, modified, removed, and pending-to-posted records. Pagination is collected before a database transaction commits the imported data and cursor together; Plaid pagination-mutation errors restart from the original cursor. If amounts change, prior confirmation/netting is invalidated for review.
+- **Freshness.** SimpleFIN refreshes each bank about once a day, so sofar cannot be more current than that. sofar checks every four hours and **Sync now** fetches at most once an hour (otherwise it says you're up to date), well inside SimpleFIN's request guidance.
+- **History.** The first sync fetches the most recent 44 days including pending items, then walks back in 45-day requests (SimpleFIN's recommended range) for up to about a year, stopping when a window comes back empty. How much a bank provides varies.
+- **Pending items** are imported and replaced when they post. A pending item that disappears is removed. If a posted amount or direction changes, earlier confirmation, splits, and netting are invalidated for review.
+- **Account types** are guessed from the account and institution names (checking, savings, credit card, investment) and can be changed on the Accounts page. Investment accounts track balances only; their trades, dividends, and sweeps are not imported. Changing an account away from investment brings its history in on the next sync.
+- **Errors.** Connection problems reported by SimpleFIN are shown on the affected accounts; failed fetches keep your data and show the reason.
 
-Balances come from `/accounts/get`; investment holdings are requested where available to refresh investment balances. Holdings positions and full investment transactions are not displayed. Institutions may deliver initial history asynchronously, and the amount available depends on the bank. See [Plaid Transactions](https://plaid.com/docs/transactions/) and [Link configuration](https://plaid.com/docs/api/link/).
+## Categories, merchants, and suggestions
 
-HTTPS Link sessions register `/api/plaid/webhook`. Requests are checked with Plaid's ES256 verification key, issued-at window, and constant-time body-hash comparison using [Plaid's documented verification process](https://plaid.com/docs/api/webhooks/webhook-verification/). Relevant verified webhooks trigger a sync. There is also hourly polling and manual **Sync now**. Polling retrieves available changes; it does not force banks to produce fresh data every hour. Failed items return an actionable error and preserve their last successful cursor.
+- **Default categories.** A first run adds 24 starter categories under the three fixed groups (for example rent & mortgage, utilities, phone & internet, subscriptions under expenses; groceries, dining out, gas & convenience, shopping, health & medical, travel under spending; savings account and investing under savings). They are modeled on [Plaid's published category taxonomy](https://plaid.com/documents/transactions-personal-finance-category-taxonomy.csv). Rename, re-plan, or delete any; deleted defaults are not re-added.
+- **Merchant directory.** `internal/budget/merchants.json` holds several hundred merchants and descriptive keywords (weighted toward Texas chains and common national brands). The Go server and the web app both read this one file, so they sort the same way. Bank descriptions are cleaned for display (processor prefixes, store numbers, and addresses are dropped, and the original text stays in the transaction details).
+- **Suggestions never confirm anything.** For each waiting transaction sofar suggests, in order: your own sorting rule (always final, including a rule that says "just the group"); money moving between your own accounts, matched by amount and date within four days (to savings or investing counts as savings; between checking accounts, or a credit card payment, is offered as "not spending"); your earlier choices for the same payer; then the directory. Deposits are suggested as paycheck, other income (dividends, interest, refunds), or transfer; an unknown deposit must be classified before it can be confirmed.
+- **Other income** is tracked but, like transfers, does not raise the safe-to-spend plan. Only deposits marked as paycheck or self-employed do.
+- **Subscriptions & recurring** has its own page: monthly and yearly cost, what is due in the next 30 days, detected patterns to confirm, flags for charges that stopped, and a list you can filter and sort. Known monthly merchants (streaming, phone, utilities, insurance, gyms, and similar) are suggested after their first charge; other patterns need the configured number of occurrences.
 
 ## Offline, notifications, and security
 
@@ -114,7 +127,7 @@ HTTPS Link sessions register `/api/plaid/webhook`. Requests are checked with Pla
 - Push requires HTTPS, notification permission, VAPID keys, and a compatible browser. On iOS, install the app to the home screen first. Push endpoints are restricted to known browser push providers to avoid arbitrary server-side requests. VAPID credentials and real-device delivery must be verified on your deployed instance.
 - Passwords use bcrypt cost 12. Sessions use random server-side tokens with only a hash stored in Postgres, a seven-day expiry, and HttpOnly/SameSite cookies. Production cookies are Secure.
 - Optional TOTP enrollment requires verifying a code; enabled login rejects reused time steps. Enabling TOTP invalidates other sessions. Basic per-address authentication rate limiting is included.
-- Mutations require JSON and an exact same-origin `Origin` header. Production requires HTTPS. Security headers and a restrictive CSP allow the Plaid Link domains and Google Fonts. System fonts work when fonts are unavailable offline.
+- Mutations require JSON and an exact same-origin `Origin` header. Production requires HTTPS. Security headers and a restrictive CSP allow only this site and Google Fonts. System fonts work when fonts are unavailable offline.
 - Bank access tokens and TOTP secrets are encrypted with AES-256-GCM. Back up Postgres and the encryption key separately. Do not commit credentials or enable public database ports.
 
 ## Validation
@@ -127,16 +140,16 @@ go vet ./...
 go test -tags integration ./server -run TestFullFlow -v -timeout 5m
 ```
 
-The integration test downloads a disposable Postgres 17 binary, uses loopback port 55439 and a project-local cache, and stops the test database afterward. To use your own database instead (for example a throwaway container), set `SOFAR_TEST_DATABASE_URL`; it must be empty because the test inserts fixed rows. It exercises actual schema creation, account setup, cookie sessions, cross-account partial repayment, duplicate-action retries, unlinking, categories, goals, notes, ignore rules, splits, manual savings deposits, account exclusion and reconnect flagging, mocked Plaid pagination/recurring detection, logout, and TOTP login. It **does not contact a real bank or send real push notifications**. The regular test suite does not download or start Postgres.
+The integration test downloads a disposable Postgres 17 binary, uses loopback port 55439 and a project-local cache, and stops the test database afterward. To use your own database instead (for example a throwaway container), set `SOFAR_TEST_DATABASE_URL`; it must be empty because the test inserts fixed rows. It exercises actual schema creation, account setup, cookie sessions, cross-account partial repayment, duplicate-action retries, unlinking, categories, goals, notes, ignore rules, splits, manual savings deposits, account exclusion and reconnect flagging, a mocked SimpleFIN Bridge (claiming, history backfill, pending reconciliation, connection errors, disconnect), merchant suggestions and transfer matching, recurring detection, logout, and TOTP login. It **does not contact a real bank or send real push notifications**. The regular test suite does not download or start Postgres.
 
-To test Plaid and push end to end, provide your own Sandbox credentials, complete Link, sync and review the data, then enable notifications on an HTTPS device and trigger a sync with pending review items. Live institution connectivity, public TLS routing, and OS push delivery depend on your deployment and cannot be validated with the bundled fixtures.
+To test SimpleFIN and push end to end, connect a real SimpleFIN token, sync and review the data, then enable notifications on an HTTPS device and trigger a sync with pending review items. Live institution connectivity, public TLS routing, and OS push delivery depend on your deployment and cannot be validated with the bundled fixtures.
 
 ## Project map
 
 ```text
 src/                 React interface, IndexedDB client, money rules/tests
 public/              PWA manifest, service worker, app icons
-server/              HTTP API, auth, Plaid sync, notifications, integration tests
+server/              HTTP API, auth, SimpleFIN sync, suggestions, notifications, integration tests
 internal/budget/     Go budget engine, merchant matching, recurrence cadence/tests
 internal/db/         Embedded idempotent Postgres schema and connection setup
 compose.yaml         Private Postgres + application deployment

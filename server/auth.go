@@ -73,7 +73,16 @@ func (s *server) limit(r *http.Request) bool {
 	s.attempts[host] = a
 	return true
 }
+
+// succeeded forgets failed attempts from this address, so only failures count toward the limit.
+func (s *server) succeeded(r *http.Request) {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	delete(s.attempts, host)
+}
 func (s *server) newSession(w http.ResponseWriter, r *http.Request) error {
+	s.succeeded(r)
 	token := randomID()
 	_, e := s.db.ExecContext(r.Context(), "INSERT INTO sessions VALUES($1,1,$2)", hashToken(token), time.Now().Add(7*24*time.Hour))
 	if e != nil {
@@ -231,5 +240,78 @@ func (s *server) totpConfirm(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Could not save enrollment.")
 		return
 	}
+	respond(w, map[string]bool{"ok": true})
+}
+func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
+	if !s.limit(r) {
+		fail(w, 429, "Too many attempts. Try again in 15 minutes.")
+		return
+	}
+	var in struct{ Current, Next string }
+	if decode(r, &in) != nil || len(in.Current) > 72 {
+		fail(w, 400, "Invalid password details.")
+		return
+	}
+	if len(in.Next) < 12 || len(in.Next) > 72 {
+		fail(w, 400, "Use a new password of 12–72 bytes.")
+		return
+	}
+	var hash string
+	if e := s.db.QueryRowContext(r.Context(), "SELECT password_hash FROM users WHERE id=1").Scan(&hash); e != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Current)) != nil {
+		fail(w, 401, "Your current password did not match.")
+		return
+	}
+	next, e := bcrypt.GenerateFromPassword([]byte(in.Next), 12)
+	if e != nil {
+		fail(w, 500, "Could not secure password.")
+		return
+	}
+	c, _ := r.Cookie("sofar_session")
+	tx, e := s.db.BeginTx(r.Context(), nil)
+	if e != nil {
+		fail(w, 500, "Could not change password.")
+		return
+	}
+	defer tx.Rollback()
+	if _, e = tx.ExecContext(r.Context(), "UPDATE users SET password_hash=$1 WHERE id=1", string(next)); e == nil {
+		_, e = tx.ExecContext(r.Context(), "DELETE FROM sessions WHERE token_hash<>$1", hashToken(c.Value))
+	}
+	if e != nil || tx.Commit() != nil {
+		fail(w, 500, "Could not change password.")
+		return
+	}
+	s.succeeded(r)
+	respond(w, map[string]bool{"ok": true})
+}
+func (s *server) totpDisable(w http.ResponseWriter, r *http.Request) {
+	if !s.limit(r) {
+		fail(w, 429, "Too many attempts. Try again in 15 minutes.")
+		return
+	}
+	var in struct{ Password, Code string }
+	if decode(r, &in) != nil || len(in.Password) > 72 {
+		fail(w, 400, "Invalid details.")
+		return
+	}
+	var hash string
+	var secret sql.NullString
+	if e := s.db.QueryRowContext(r.Context(), "SELECT password_hash,totp_secret FROM users WHERE id=1").Scan(&hash, &secret); e != nil {
+		fail(w, 500, "Could not load account.")
+		return
+	}
+	if !secret.Valid || secret.String == "" {
+		fail(w, 409, "Two-step verification is already off.")
+		return
+	}
+	plain, e := s.unseal(secret.String)
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)) != nil || e != nil || !totp.Validate(in.Code, plain) {
+		fail(w, 401, "Check your password and authenticator code.")
+		return
+	}
+	if _, e = s.db.ExecContext(r.Context(), "UPDATE users SET totp_secret=NULL,totp_pending=NULL,totp_last_step=0 WHERE id=1"); e != nil {
+		fail(w, 500, "Could not turn off two-step verification.")
+		return
+	}
+	s.succeeded(r)
 	respond(w, map[string]bool{"ok": true})
 }

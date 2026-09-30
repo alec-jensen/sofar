@@ -3,9 +3,14 @@ CREATE TABLE IF NOT EXISTS users (
  totp_secret text, totp_pending text, totp_last_step bigint NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (token_hash text PRIMARY KEY, user_id integer NOT NULL REFERENCES users(id), expires_at timestamptz NOT NULL);
-CREATE TABLE IF NOT EXISTS plaid_items (id text PRIMARY KEY, access_token text NOT NULL, cursor text NOT NULL DEFAULT '', institution_name text NOT NULL, kind text NOT NULL, last_error text);
+-- One SimpleFIN access URL (encrypted) covers every bank linked in SimpleFIN Bridge.
+CREATE TABLE IF NOT EXISTS simplefin (
+ id integer PRIMARY KEY CHECK(id=1), access_url text NOT NULL, bridge_url text NOT NULL DEFAULT '',
+ backfilled boolean NOT NULL DEFAULT false, last_fetch timestamptz, last_error text
+);
+CREATE TABLE IF NOT EXISTS connections (id text PRIMARY KEY, name text NOT NULL, org_url text NOT NULL DEFAULT '', last_error text);
 CREATE TABLE IF NOT EXISTS accounts (
- id text PRIMARY KEY, plaid_item_id text NOT NULL REFERENCES plaid_items(id), plaid_account_id text UNIQUE NOT NULL,
+ id text PRIMARY KEY, connection_id text NOT NULL DEFAULT '', external_id text NOT NULL DEFAULT '',
  institution_name text NOT NULL, account_type text NOT NULL, account_subtype text NOT NULL DEFAULT '', display_name text NOT NULL,
  mask text NOT NULL DEFAULT '', balance bigint NOT NULL DEFAULT 0, last_synced_at timestamptz
 );
@@ -56,3 +61,23 @@ CREATE INDEX IF NOT EXISTS transaction_splits_tx_idx ON transaction_splits(trans
 CREATE TABLE IF NOT EXISTS ignore_rules (merchant_pattern text PRIMARY KEY);
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS excluded_from_safe boolean NOT NULL DEFAULT false;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS needs_reauth boolean NOT NULL DEFAULT false;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS nickname text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS manual boolean NOT NULL DEFAULT false;
+UPDATE transactions SET manual=true WHERE manual=false AND id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' AND category_id='savings' AND review_status='confirmed' AND direction='out';
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS connection_id text NOT NULL DEFAULT '';
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS external_id text NOT NULL DEFAULT '';
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS removed boolean NOT NULL DEFAULT false;
+-- Plaid was replaced by SimpleFIN: drop its connections and the data they imported.
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='accounts' AND column_name='plaid_item_id') THEN
+  UPDATE transactions SET review_status='pending',category_id=NULL,subcategory_id=NULL,income_stream=NULL WHERE id IN (SELECT l.reimbursement_transaction_id FROM reimbursement_links l JOIN transactions t ON t.id=l.expense_transaction_id JOIN accounts a ON a.id=t.account_id WHERE a.plaid_item_id IS NOT NULL);
+  DELETE FROM transactions WHERE account_id IN (SELECT id FROM accounts WHERE plaid_item_id IS NOT NULL);
+  DELETE FROM accounts WHERE plaid_item_id IS NOT NULL;
+  ALTER TABLE accounts DROP COLUMN plaid_item_id;
+  ALTER TABLE accounts DROP COLUMN IF EXISTS plaid_account_id;
+ END IF;
+END $$;
+DROP TABLE IF EXISTS plaid_items;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '';
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_income_stream_check;
+ALTER TABLE transactions ADD CONSTRAINT transactions_income_stream_check CHECK(income_stream IN ('salary','self-employed','transfer','other'));

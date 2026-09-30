@@ -35,7 +35,6 @@ type server struct {
 	syncMu                 sync.Mutex
 	authMu                 sync.Mutex
 	attempts               map[string]attempt
-	plaidBase              string
 }
 type attempt struct {
 	Count int
@@ -76,11 +75,12 @@ func main() {
 		log.Fatal().Err(err).Msg("open database")
 	}
 	defer d.Close()
-	plaidEnv := env("PLAID_ENV", "sandbox")
-	if plaidEnv != "sandbox" && plaidEnv != "production" {
-		log.Fatal().Msg("PLAID_ENV must be sandbox or production")
+	seedCtx, seedDone := context.WithTimeout(ctx, 30*time.Second)
+	if err = seedDefaults(seedCtx, d); err != nil {
+		log.Fatal().Err(err).Msg("seed default categories")
 	}
-	s := &server{db: d, origin: origin, production: production, trustProxy: os.Getenv("TRUST_PROXY") == "true", encryption: aead, client: &http.Client{Timeout: 45 * time.Second}, attempts: map[string]attempt{}, plaidBase: "https://" + plaidEnv + ".plaid.com"}
+	seedDone()
+	s := &server{db: d, origin: origin, production: production, trustProxy: os.Getenv("TRUST_PROXY") == "true", encryption: aead, client: &http.Client{Timeout: 45 * time.Second}, attempts: map[string]attempt{}}
 	httpServer := &http.Server{Addr: env("SOFAR_ADDR", "127.0.0.1:8080"), Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	go s.poll(ctx)
 	go func() {
@@ -105,16 +105,16 @@ func (s *server) routes() http.Handler {
 	m.HandleFunc("GET /api/auth/status", s.authStatus)
 	m.HandleFunc("POST /api/auth/setup", s.setup)
 	m.HandleFunc("POST /api/auth/login", s.login)
-	m.HandleFunc("POST /api/plaid/webhook", s.webhook)
 	m.Handle("POST /api/auth/logout", s.protect(s.logout))
 	m.Handle("POST /api/auth/totp/setup", s.protect(s.totpSetup))
 	m.Handle("POST /api/auth/totp/confirm", s.protect(s.totpConfirm))
+	m.Handle("POST /api/auth/totp/disable", s.protect(s.totpDisable))
+	m.Handle("POST /api/auth/password", s.protect(s.changePassword))
 	m.Handle("GET /api/state", s.protect(s.stateHandler))
 	m.Handle("POST /api/actions", s.protect(s.actionHandler))
 	m.Handle("POST /api/sync", s.protect(s.syncHandler))
-	m.Handle("POST /api/plaid/link-token", s.protect(s.linkToken))
-	m.Handle("POST /api/plaid/update-token", s.protect(s.updateLinkToken))
-	m.Handle("POST /api/plaid/exchange", s.protect(s.exchange))
+	m.Handle("POST /api/simplefin/connect", s.protect(s.simplefinConnect))
+	m.Handle("POST /api/simplefin/disconnect", s.protect(s.simplefinDisconnect))
 	m.Handle("GET /api/push/config", s.protect(s.pushConfig))
 	m.Handle("POST /api/push/subscribe", s.protect(s.pushSubscribe))
 	m.Handle("POST /api/push/unsubscribe", s.protect(s.pushUnsubscribe))
@@ -161,7 +161,7 @@ func (s *server) routes() http.Handler {
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.plaid.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self' otpauth:")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' otpauth:")
 		if s.production {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 			if r.TLS == nil && !(s.trustProxy && r.Header.Get("X-Forwarded-Proto") == "https") {
@@ -172,7 +172,7 @@ func (s *server) routes() http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
 		}
-		if r.Method != "GET" && r.Method != "HEAD" && r.URL.Path != "/api/plaid/webhook" {
+		if r.Method != "GET" && r.Method != "HEAD" {
 			origin := r.Header.Get("Origin")
 			if origin != s.origin {
 				fail(w, 403, "Request origin is not allowed.")

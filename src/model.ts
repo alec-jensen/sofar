@@ -8,16 +8,21 @@ export type Transaction = {
   category: Category | null;
   status: "pending" | "confirmed";
   direction: "in" | "out";
-  incomeStream?: "salary" | "self-employed" | "transfer";
+  incomeStream?: "salary" | "self-employed" | "transfer" | "other";
   suggested?: Category;
   subcategoryId?: string;
   suggestedSubcategoryId?: string;
+  suggestedIncomeStream?: "salary" | "self-employed" | "transfer" | "other";
+  suggestedIgnore?: string;
+  suggestionNote?: string;
+  description?: string;
   recurringId?: string;
   bankPending?: boolean;
   note?: string;
   ignored?: boolean;
   ignoreReason?: string;
   splits?: { category: Category; subcategoryId?: string; amount: number }[];
+  manual?: boolean;
 };
 export type Account = {
   id: string;
@@ -30,6 +35,7 @@ export type Account = {
   syncedAt: string;
   excludedFromSafeToSpend?: boolean;
   needsReauth?: boolean;
+  problem?: string;
 };
 export type Recurring = {
   id: string;
@@ -60,6 +66,7 @@ export type State = {
   lastSync: string;
   demo: boolean;
   ignoreRules: { pattern: string }[];
+  connection?: { connected: boolean; bridgeUrl?: string; lastFetch?: string; error?: string };
 };
 export type Action = {
   id: string;
@@ -90,6 +97,11 @@ export type Action = {
   clearReauth?: boolean;
   fromAccountId?: string;
   date?: string;
+  name?: string;
+  merchant?: string;
+  cadence?: Recurring["cadence"];
+  nextDate?: string;
+  accountType?: string;
 };
 export const money = (c: number, decimals = false) =>
   new Intl.NumberFormat("en-US", {
@@ -103,6 +115,25 @@ export const dailyAllowance = (monthlyCents: number, period: Date) =>
     monthlyCents /
       new Date(period.getFullYear(), period.getMonth() + 1, 0).getDate(),
   );
+// Recurring items store the next date seen at detection; move it past today
+// by whole cadence steps so "coming up" stays current between syncs.
+export function nextDue(r: Pick<Recurring, "nextDate" | "cadence">, today = new Date()) {
+  const floor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const d = new Date(r.nextDate + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return r.nextDate;
+  const day = d.getDate();
+  for (let i = 0; d < floor && i < 1000; i++) {
+    if (r.cadence === "weekly") d.setDate(d.getDate() + 7);
+    else if (r.cadence === "biweekly") d.setDate(d.getDate() + 14);
+    else {
+      const months = r.cadence === "annual" ? 12 : 1;
+      const target = new Date(d.getFullYear(), d.getMonth() + months, 1);
+      target.setDate(Math.min(day, new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()));
+      d.setTime(target.getTime());
+    }
+  }
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 export const normalize = (s: string) =>
   s
     .toLowerCase()
@@ -194,6 +225,8 @@ export function reimbursementMatches(s: State, credit: Transaction) {
       (t) =>
         t.direction === "out" &&
         t.status === "confirmed" &&
+        !t.ignored &&
+        !t.splits &&
         t.date <= credit.date &&
         t.amount >
           s.links
@@ -247,8 +280,17 @@ export function applyAction(state: State, a: Action): State {
     t.ignoreReason = undefined;
     t.splits = undefined;
     const pattern = normalize(t.merchant);
-    s.rules = s.rules.filter((r) => r.pattern !== pattern);
-    s.rules.push({ pattern, category: a.category, subcategoryId: a.subcategoryId, enabled: true });
+    if (t.direction === "out")
+      for (const r of s.recurring) if (r.type === "bill" && (t.recurringId === r.id || normalize(r.merchant) === pattern)) r.category = a.category;
+    if (a.always)
+      for (const other of s.transactions) {
+        if (other === t || other.status !== "pending" || other.bankPending || other.direction !== t.direction || normalize(other.merchant) !== pattern || s.links.some((l) => l.creditId === other.id)) continue;
+        Object.assign(other, { category: a.category, subcategoryId: a.subcategoryId, status: "confirmed", incomeStream: t.incomeStream, ignored: false, ignoreReason: undefined, splits: undefined });
+      }
+    if (t.direction === "out") {
+      s.rules = s.rules.filter((r) => r.pattern !== pattern);
+      s.rules.push({ pattern, category: a.category, subcategoryId: a.subcategoryId, enabled: true });
+    }
   }
   if (a.type === "reimburse") {
     const e = s.transactions.find((t) => t.id === a.expenseId),
@@ -357,6 +399,9 @@ export function applyAction(state: State, a: Action): State {
       const pattern = normalize(t.merchant);
       if (!s.ignoreRules.some((r) => r.pattern === pattern))
         s.ignoreRules.push({ pattern });
+      for (const other of s.transactions)
+        if (other.status === "pending" && !other.bankPending && normalize(other.merchant) === pattern)
+          Object.assign(other, { status: "confirmed", ignored: true, ignoreReason: a.reason, category: null });
     }
   }
   if (a.type === "split" && t && a.splits) {
@@ -387,13 +432,65 @@ export function applyAction(state: State, a: Action): State {
       category: "savings",
       status: "confirmed",
       direction: "out",
+      manual: true,
     });
+  }
+  if (a.type === "delete-transaction" && t) {
+    if (!t.manual) throw new Error("Only entries you added yourself can be deleted.");
+    for (const l of s.links.filter((l) => l.expenseId === t.id || l.creditId === t.id)) {
+      const c = s.transactions.find((x) => x.id === l.creditId);
+      if (c) { c.status = "pending"; c.category = null; c.incomeStream = undefined; }
+    }
+    s.links = s.links.filter((l) => l.expenseId !== t.id && l.creditId !== t.id);
+    s.transactions = s.transactions.filter((x) => x.id !== t.id);
+  }
+  if (a.type === "auto-categorize") {
+    for (const tx of s.transactions)
+      if (tx.status === "confirmed" && tx.direction === "out" && !tx.ignored && !tx.manual && !tx.splits && !tx.subcategoryId && tx.suggestedSubcategoryId && !tx.suggestedIgnore && !s.rules.some((r) => r.enabled !== false && !r.subcategoryId && normalize(tx.merchant).includes(r.pattern))) {
+        tx.category = tx.suggested || tx.category;
+        tx.subcategoryId = tx.suggestedSubcategoryId;
+      }
+  }
+  if (a.type === "account-remove" && a.accountId) {
+    const gone = new Set(s.transactions.filter((x) => x.accountId === a.accountId && !x.manual).map((x) => x.id));
+    for (const l of s.links.filter((l) => gone.has(l.expenseId) && !gone.has(l.creditId))) {
+      const c = s.transactions.find((x) => x.id === l.creditId);
+      if (c) { c.status = "pending"; c.category = null; c.incomeStream = undefined; }
+    }
+    s.links = s.links.filter((l) => !gone.has(l.expenseId) && !gone.has(l.creditId));
+    s.transactions = s.transactions.filter((x) => !gone.has(x.id));
+    s.accounts = s.accounts.filter((x) => x.id !== a.accountId);
+  }
+  if (a.type === "recurring-create") {
+    const merchant = (a.merchant || "").trim();
+    if (normalize(merchant).length < 2) throw new Error("Enter a name for this bill.");
+    if (!a.amount || a.amount <= 0) throw new Error("Enter a positive amount.");
+    if (!a.cadence || !a.nextDate) throw new Error("Choose how often it repeats and when it's next due.");
+    const existing = s.recurring.find((r) => r.type === "bill" && normalize(r.merchant) === normalize(merchant));
+    const item: Recurring = {
+      id: existing?.id || a.id,
+      merchant,
+      amount: a.amount,
+      tolerance: a.tolerance ?? 10,
+      cadence: a.cadence,
+      type: "bill",
+      category: a.category || "expenses",
+      confirmed: true,
+      threshold: s.threshold,
+      nextDate: a.nextDate,
+    };
+    s.recurring = existing ? s.recurring.map((r) => (r.id === existing.id ? item : r)) : [...s.recurring, item];
   }
   if (a.type === "account-settings" && a.accountId) {
     const account = s.accounts.find((acc) => acc.id === a.accountId);
     if (account) {
       if (a.excluded !== undefined) account.excludedFromSafeToSpend = a.excluded;
       if (a.clearReauth) account.needsReauth = false;
+      if (a.name !== undefined) account.name = a.name.trim() || account.name;
+      if (a.accountType) {
+        account.type = a.accountType === "checking" || a.accountType === "savings" ? "depository" : a.accountType;
+        account.subtype = { checking: "checking", savings: "savings", credit: "credit card", investment: "brokerage" }[a.accountType] || account.subtype;
+      }
     }
   }
   s.goal.saved += savedTotal(s) - previousSaved;
@@ -446,7 +543,7 @@ export function demoState(): State {
       amount,
       merchant,
       category,
-      subcategoryId: merchant.includes("Rent") ? "rent" : merchant.includes("Internet") ? "utilities" : merchant.includes("Spotify") ? "subscriptions" : merchant.includes("Whole Foods") || merchant.includes("Trader Joe") ? "groceries" : merchant.includes("Coffee") || merchant.includes("Dinner") ? "food-out" : merchant.includes("fund") ? "future" : "other",
+      subcategoryId: merchant.includes("Rent") ? "housing" : merchant.includes("Internet") ? "phone" : merchant.includes("Spotify") ? "subscriptions" : merchant.includes("Whole Foods") || merchant.includes("Trader Joe") ? "groceries" : merchant.includes("Coffee") ? "coffee" : merchant.includes("Dinner") ? "dining" : merchant.includes("fund") ? "savings-account" : "shopping",
       status: "confirmed",
       direction: "out",
     }),
@@ -466,7 +563,7 @@ export function demoState(): State {
       merchant: String(merchant),
       category: null,
       suggested: category as Category,
-      suggestedSubcategoryId: String(merchant).includes("NETFLIX") || String(merchant).includes("Figma") ? "subscriptions" : String(merchant).includes("Sweetgreen") ? "food-out" : undefined,
+      suggestedSubcategoryId: String(merchant).includes("NETFLIX") || String(merchant).includes("Figma") ? "subscriptions" : String(merchant).includes("Sweetgreen") ? "dining" : String(merchant).includes("Bookshop") ? "shopping" : undefined,
       status: "pending",
       direction: i === 2 ? "in" : "out",
     }),
@@ -474,6 +571,7 @@ export function demoState(): State {
   return {
     demo: true,
     lastSync: now.toISOString(),
+    connection: { connected: true, bridgeUrl: "https://bridge.simplefin.org", lastFetch: now.toISOString() },
     transactions: tx,
     categories: {
       expenses: "expenses",
@@ -484,13 +582,19 @@ export function demoState(): State {
     rules: [],
     ignoreRules: [],
     subcategories: [
-      { id: "rent", name: "rent", group: "expenses", monthlyPlan: 165000 },
-      { id: "utilities", name: "utilities", group: "expenses", monthlyPlan: 25000 },
+      { id: "housing", name: "rent & mortgage", group: "expenses", monthlyPlan: 165000 },
+      { id: "utilities", name: "utilities", group: "expenses", monthlyPlan: 10000 },
+      { id: "phone", name: "phone & internet", group: "expenses", monthlyPlan: 7500 },
       { id: "subscriptions", name: "subscriptions", group: "expenses", monthlyPlan: 5000 },
+      { id: "insurance", name: "insurance", group: "expenses", monthlyPlan: 18300 },
       { id: "groceries", name: "groceries", group: "spending", monthlyPlan: 50000 },
-      { id: "food-out", name: "food out", group: "spending", monthlyPlan: 20000 },
-      { id: "other", name: "other", group: "spending", monthlyPlan: 30000 },
-      { id: "future", name: "future", group: "savings", monthlyPlan: 60000 },
+      { id: "dining", name: "dining out", group: "spending", monthlyPlan: 15000 },
+      { id: "coffee", name: "coffee & treats", group: "spending", monthlyPlan: 5000 },
+      { id: "gas", name: "gas & convenience", group: "spending", monthlyPlan: 12000 },
+      { id: "shopping", name: "shopping", group: "spending", monthlyPlan: 20000 },
+      { id: "entertainment", name: "entertainment", group: "spending", monthlyPlan: 8000 },
+      { id: "savings-account", name: "savings account", group: "savings", monthlyPlan: 60000 },
+      { id: "investing", name: "investing", group: "savings", monthlyPlan: 0 },
     ],
     links: [],
     goal: {

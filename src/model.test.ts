@@ -131,7 +131,7 @@ describe("money rules", () => {
   it("reserves expense plans above detected bills and keeps category moves consistent", () => {
     const s = demoState();
     const prior = budget(s).safe;
-    const rent = s.subcategories!.find(c => c.id === "rent")!;
+    const rent = s.subcategories!.find(c => c.id === "housing")!;
     const planned = applyAction(s, { id: "plan", type: "subcategory-upsert", subcategory: { ...rent, monthlyPlan: 300000 } });
     expect(budget(planned).safe).toBeLessThan(prior);
     const moved = applyAction(planned, { id: "move", type: "subcategory-upsert", subcategory: { ...rent, group: "spending" } });
@@ -231,11 +231,11 @@ describe("money rules", () => {
       type: "rule-backfill",
       pattern: "whole foods",
       category: "expenses",
-      subcategoryId: "rent",
+      subcategoryId: "housing",
     });
     const t = next.transactions.find((t) => t.id === "t0")!;
     expect(t.category).toBe("expenses");
-    expect(t.subcategoryId).toBe("rent");
+    expect(t.subcategoryId).toBe("housing");
   });
   it("can pause, edit, and delete sorting rules", () => {
     const s = demoState();

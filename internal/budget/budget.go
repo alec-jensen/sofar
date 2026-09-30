@@ -20,12 +20,17 @@ type Transaction struct {
 	Suggested              string  `json:"suggested,omitempty"`
 	SubcategoryID          string  `json:"subcategoryId,omitempty"`
 	SuggestedSubcategoryID string  `json:"suggestedSubcategoryId,omitempty"`
+	SuggestedIncomeStream  string  `json:"suggestedIncomeStream,omitempty"`
+	SuggestedIgnore        string  `json:"suggestedIgnore,omitempty"`
+	SuggestionNote         string  `json:"suggestionNote,omitempty"`
+	Description            string  `json:"description,omitempty"`
 	RecurringID            string  `json:"recurringId,omitempty"`
 	BankPending            bool    `json:"bankPending,omitempty"`
 	Note                   string  `json:"note,omitempty"`
 	Ignored                bool    `json:"ignored,omitempty"`
 	IgnoreReason           string  `json:"ignoreReason,omitempty"`
 	Splits                 []Split `json:"splits,omitempty"`
+	Manual                 bool    `json:"manual,omitempty"`
 }
 type Split struct {
 	Category      string `json:"category"`
