@@ -127,3 +127,27 @@ func (s *server) notify(ctx context.Context) {
 		}
 	}
 }
+
+// pushDevices reports how many devices currently receive notifications.
+func (s *server) pushDevices(w http.ResponseWriter, r *http.Request) {
+	var n int
+	if e := s.db.QueryRowContext(r.Context(), "SELECT count(*) FROM push_subscriptions").Scan(&n); e != nil {
+		fail(w, 500, "Could not read notification settings.")
+		return
+	}
+	respond(w, map[string]int{"count": n})
+}
+
+// pushRevokeAll stops notifications on every device, for a lost or retired phone.
+func (s *server) pushRevokeAll(w http.ResponseWriter, r *http.Request) {
+	var in struct{}
+	if decode(r, &in) != nil {
+		fail(w, 400, "Invalid request.")
+		return
+	}
+	if _, e := s.db.ExecContext(r.Context(), "DELETE FROM push_subscriptions"); e != nil {
+		fail(w, 500, "Could not turn off notifications.")
+		return
+	}
+	respond(w, map[string]bool{"ok": true})
+}

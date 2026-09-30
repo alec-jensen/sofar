@@ -170,6 +170,10 @@ func (s *server) simplefinConnect(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "That doesn't look like a SimpleFIN setup token. Copy the whole token from SimpleFIN Bridge.")
 		return
 	}
+	if !s.bridgeHostOK(claim.Hostname()) {
+		fail(w, 400, "sofar only connects to SimpleFIN Bridge (simplefin.org). For a self-hosted bridge, add its host to SIMPLEFIN_ALLOWED_HOSTS.")
+		return
+	}
 	req, e := http.NewRequestWithContext(r.Context(), "POST", claim.String(), nil)
 	if e != nil {
 		fail(w, 400, "That doesn't look like a SimpleFIN setup token.")
@@ -194,6 +198,10 @@ func (s *server) simplefinConnect(w http.ResponseWriter, r *http.Request) {
 	access, e := parseAccessURL(string(body))
 	if e != nil {
 		fail(w, 502, e.Error())
+		return
+	}
+	if !s.bridgeHostOK(access.Hostname()) {
+		fail(w, 502, "SimpleFIN returned an access URL on an unexpected host, so sofar did not save it.")
 		return
 	}
 	bridge := claim.Scheme + "://" + claim.Host
@@ -351,6 +359,9 @@ func (s *server) syncAll(ctx context.Context, force bool) (bool, error) {
 	if e != nil {
 		return false, e
 	}
+	if !s.bridgeHostOK(access.Hostname()) {
+		return false, errors.New("the stored SimpleFIN access points at an unexpected host; connect again")
+	}
 	now := time.Now()
 	end := now.Add(24 * time.Hour)
 	recent, e := s.fetchAccounts(ctx, access, now.Add(-recentWindow), end, true)
@@ -421,7 +432,7 @@ func (s *server) store(ctx context.Context, sets []sfinAccountSet, recentStart t
 			return e
 		}
 		if c.URL != "" {
-			if u, pe := url.Parse(c.URL); pe == nil && u.Scheme == "https" {
+			if u, pe := url.Parse(c.URL); pe == nil && u.Scheme == "https" && s.bridgeHostOK(u.Hostname()) {
 				tx.ExecContext(ctx, "UPDATE simplefin SET bridge_url=$1 WHERE id=1", u.Scheme+"://"+u.Host)
 			}
 		}

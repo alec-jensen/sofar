@@ -30,6 +30,9 @@ type server struct {
 	db                     *sql.DB
 	origin                 string
 	production, trustProxy bool
+	bridgeHosts            []string
+	globalFails            int
+	globalUntil            time.Time
 	encryption             cipher.AEAD
 	client                 *http.Client
 	syncMu                 sync.Mutex
@@ -80,7 +83,7 @@ func main() {
 		log.Fatal().Err(err).Msg("seed default categories")
 	}
 	seedDone()
-	s := &server{db: d, origin: origin, production: production, trustProxy: os.Getenv("TRUST_PROXY") == "true", encryption: aead, client: &http.Client{Timeout: 45 * time.Second}, attempts: map[string]attempt{}}
+	s := &server{db: d, origin: origin, production: production, trustProxy: os.Getenv("TRUST_PROXY") == "true", encryption: aead, client: newOutboundClient(), bridgeHosts: bridgeHostsFromEnv(), attempts: map[string]attempt{}}
 	httpServer := &http.Server{Addr: env("SOFAR_ADDR", "127.0.0.1:8080"), Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	go s.poll(ctx)
 	go func() {
@@ -118,6 +121,8 @@ func (s *server) routes() http.Handler {
 	m.Handle("GET /api/push/config", s.protect(s.pushConfig))
 	m.Handle("POST /api/push/subscribe", s.protect(s.pushSubscribe))
 	m.Handle("POST /api/push/unsubscribe", s.protect(s.pushUnsubscribe))
+	m.Handle("GET /api/push/devices", s.protect(s.pushDevices))
+	m.Handle("POST /api/push/revoke-all", s.protect(s.pushRevokeAll))
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.db.PingContext(r.Context()); err != nil {
 			fail(w, 503, "Database unavailable.")

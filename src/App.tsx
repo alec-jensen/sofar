@@ -166,6 +166,7 @@ export default function App() {
     [monthOffset, setMonthOffset] = useState(0),
     [pushEnabled, setPushEnabled] = useState(false),
     [totpEnabled, setTotpEnabled] = useState(false),
+    [pushDevices, setPushDevices] = useState(0),
     [hapticsEnabled, setHapticsEnabled] = useState(() => localStorage.getItem("sofar-haptics") !== "off"),
     [motionMode, setMotionMode] = useState<MotionMode>(() => (localStorage.getItem("sofar-motion") === "off" ? "off" : "expressive"));
   const [search, setSearch] = useState(""),
@@ -345,6 +346,12 @@ export default function App() {
       .then((sub) => setPushEnabled(!!sub))
       .catch(() => {});
   }, [s?.demo]);
+  useEffect(() => {
+    if (page !== "Settings" || !s || s.demo) return;
+    api("/push/devices")
+      .then((d) => setPushDevices(d.count))
+      .catch(() => {});
+  }, [page, s?.demo, pushEnabled]);
   async function act(a: Omit<Action, "id">, message = "Saved.") {
     // Read the latest workspace, not this render's copy, so several actions
     // awaited in a row each build on the one before.
@@ -427,6 +434,30 @@ export default function App() {
       emitHaptic("error");
     } finally {
       setBusy(false);
+    }
+  }
+  // Stop this device's notifications, on the server and in the browser.
+  async function dropPush() {
+    try {
+      const reg = await navigator.serviceWorker?.ready;
+      const sub = await reg?.pushManager.getSubscription();
+      if (sub) {
+        await api("/push/unsubscribe", { endpoint: sub.endpoint }).catch(() => {});
+        await sub.unsubscribe();
+      }
+    } catch {
+      /* not subscribed, or push isn't supported here */
+    }
+    setPushEnabled(false);
+  }
+  async function revokeAllPush() {
+    try {
+      await api("/push/revoke-all", {});
+      await dropPush();
+      setPushDevices(0);
+      setNotice("Notifications are off on every device.");
+    } catch (e) {
+      setNotice((e as Error).message);
     }
   }
   async function notifications() {
@@ -1888,15 +1919,23 @@ export default function App() {
                     <strong>review reminders</strong>
                     <p>
                       one push after a sync, with everything that needs a look.
+                      {pushDevices > 0 && ` on for ${pushDevices} ${pushDevices === 1 ? "device" : "devices"}.`}
                     </p>
                   </div>
-                  <button
-                    className="button small-button"
-                    onClick={notifications}
-                  >
-                    <Bell size={16} />
-                    {pushEnabled ? "turn off" : "enable"}
-                  </button>
+                  <span className="setting-actions">
+                    {pushDevices > (pushEnabled ? 1 : 0) ? (
+                      <button className="text-button account-disconnect" onClick={revokeAllPush}>
+                        turn off on all devices
+                      </button>
+                    ) : null}
+                    <button
+                      className="button small-button"
+                      onClick={notifications}
+                    >
+                      <Bell size={16} />
+                      {pushEnabled ? "turn off" : "enable"}
+                    </button>
+                  </span>
                 </div>
                 <div className="setting-line">
                   <div>
@@ -1931,22 +1970,24 @@ export default function App() {
                         );
                         return;
                       }
-                      try {
-                        const data = await api("/auth/totp/setup", {});
-                        setModal(
-                          <TOTPForm
-                            secret={data.secret}
-                            url={data.url}
-                            onDone={() => {
-                              setModal(null);
-                              setTotpEnabled(true);
-                              setNotice("Two-step verification is on.");
-                            }}
-                          />,
-                        );
-                      } catch (e) {
-                        setNotice((e as Error).message);
-                      }
+                      setModal(
+                        <TOTPStart
+                          onStarted={(data, password) =>
+                            setModal(
+                              <TOTPForm
+                                secret={data.secret}
+                                url={data.url}
+                                password={password}
+                                onDone={() => {
+                                  setModal(null);
+                                  setTotpEnabled(true);
+                                  setNotice("Two-step verification is on.");
+                                }}
+                              />,
+                            )
+                          }
+                        />,
+                      );
                     }}
                   >
                     <ShieldCheck size={16} />
@@ -1999,6 +2040,7 @@ export default function App() {
                         }
                       } else {
                         try {
+                          await dropPush();
                           await api("/auth/logout", {});
                           await clearPrivate();
                           setState(null);
@@ -2652,13 +2694,50 @@ function AuthForm({
     </form>
   );
 }
+// Enrolling an authenticator changes how you sign in, so it asks for the password again.
+function TOTPStart({ onStarted }: { onStarted: (data: { secret: string; url: string }, password: string) => void }) {
+  const [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const password = String(new FormData(e.currentTarget).get("password"));
+        setBusy(true);
+        try {
+          onStarted(await api("/auth/totp/setup", { password }), password);
+        } catch (err) {
+          setError((err as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <span className="modal-symbol">
+        <ShieldCheck />
+      </span>
+      <h2>set up two-step verification</h2>
+      <p>enter your password to continue.</p>
+      <label className="field">
+        password
+        <input name="password" type="password" required autoComplete="current-password" />
+      </label>
+      {error && <p className="error" role="alert">{error}</p>}
+      <button className="button primary full" disabled={busy}>
+        {busy ? <Loader2 className="spin" size={18} /> : "continue"}
+      </button>
+    </form>
+  );
+}
 function TOTPForm({
   secret,
   url,
+  password,
   onDone,
 }: {
   secret: string;
   url: string;
+  password: string;
   onDone: () => void;
 }) {
   const [error, setError] = useState("");
@@ -2675,6 +2754,7 @@ function TOTPForm({
         try {
           await api("/auth/totp/confirm", {
             code: new FormData(e.currentTarget).get("code"),
+            password,
           });
           onDone();
         } catch (e) {

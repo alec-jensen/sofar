@@ -56,7 +56,7 @@ func TestFullFlow(t *testing.T) {
 	if e = seedDefaults(context.Background(), database); e != nil {
 		t.Fatal(e)
 	}
-	s := &server{db: database, encryption: aead, origin: "http://sofar.test", client: &http.Client{Timeout: 10 * time.Second}, attempts: map[string]attempt{}}
+	s := &server{db: database, encryption: aead, origin: "http://sofar.test", client: &http.Client{Timeout: 10 * time.Second}, bridgeHosts: []string{"127.0.0.1"}, attempts: map[string]attempt{}}
 	handler := s.routes()
 	var cookie *http.Cookie
 	call := func(path string, body string, want int) *httptest.ResponseRecorder {
@@ -437,11 +437,15 @@ func TestFullFlow(t *testing.T) {
 		t.Fatal("push subscription was not removed", e)
 	}
 	call("/api/state", "", 200)
-	response = call("/api/auth/totp/setup", `{}`, 200)
+	// enrolling an authenticator needs the password, not just a session
+	call("/api/auth/totp/setup", `{}`, 401)
+	call("/api/auth/totp/setup", `{"password":"not the password"}`, 401)
+	response = call("/api/auth/totp/setup", `{"password":"a long test password"}`, 200)
 	var enrollment struct{ Secret string }
 	json.Unmarshal(response.Body.Bytes(), &enrollment)
 	code, _ := totp.GenerateCode(enrollment.Secret, time.Now())
-	call("/api/auth/totp/confirm", `{"code":"`+code+`"}`, 200)
+	call("/api/auth/totp/confirm", `{"code":"`+code+`"}`, 401)
+	call("/api/auth/totp/confirm", `{"code":"`+code+`","password":"a long test password"}`, 200)
 	call("/api/auth/logout", `{}`, 200)
 	call("/api/state", "", 401)
 	call("/api/auth/login", `{"username":"test","password":"a long test password","code":"000000"}`, 401)
@@ -456,9 +460,30 @@ func TestFullFlow(t *testing.T) {
 	// two-step verification can be turned off with the password and a current code
 	call("/api/auth/totp/disable", `{"password":"wrong password","code":"`+code+`"}`, 401)
 	call("/api/auth/totp/disable", `{"password":"a long test password","code":"`+code+`"}`, 200)
+	// notification devices can be counted and revoked, and a password change revokes them
+	for _, endpoint := range []string{"https://fcm.googleapis.com/fcm/send/device-1", "https://web.push.apple.com/device-2"} {
+		if _, e = database.Exec("INSERT INTO push_subscriptions(endpoint,user_id,keys) VALUES($1,1,'{}')", endpoint); e != nil {
+			t.Fatal(e)
+		}
+	}
+	var devices struct{ Count int }
+	json.Unmarshal(call("/api/push/devices", "", 200).Body.Bytes(), &devices)
+	if devices.Count != 2 {
+		t.Fatalf("expected 2 devices, got %d", devices.Count)
+	}
+	call("/api/push/revoke-all", `{}`, 200)
+	json.Unmarshal(call("/api/push/devices", "", 200).Body.Bytes(), &devices)
+	if devices.Count != 0 {
+		t.Fatal("revoke-all left subscriptions behind")
+	}
+	database.Exec("INSERT INTO push_subscriptions(endpoint,user_id,keys) VALUES('https://fcm.googleapis.com/fcm/send/device-3',1,'{}')")
 	// changing the password keeps this session and requires the new one next time
 	call("/api/auth/password", `{"current":"a long test password","next":"short"}`, 400)
 	call("/api/auth/password", `{"current":"a long test password","next":"a different long password"}`, 200)
+	json.Unmarshal(call("/api/push/devices", "", 200).Body.Bytes(), &devices)
+	if devices.Count != 0 {
+		t.Fatal("a password change must revoke notification subscriptions")
+	}
 	call("/api/state", "", 200)
 	call("/api/auth/logout", `{}`, 200)
 	call("/api/auth/login", `{"username":"test","password":"a long test password"}`, 401)

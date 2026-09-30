@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -55,12 +54,16 @@ func (s *server) authStatus(w http.ResponseWriter, r *http.Request) {
 func (s *server) limit(r *http.Request) bool {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	host := s.clientIP(r)
 	now := time.Now()
 	for k, a := range s.attempts {
 		if now.After(a.Until) {
 			delete(s.attempts, k)
 		}
+	}
+	if len(s.attempts) > 20000 {
+		// Bound memory under a flood of distinct addresses; the per-address windows are short anyway.
+		s.attempts = map[string]attempt{}
 	}
 	a := s.attempts[host]
 	if a.Count >= 10 {
@@ -78,8 +81,41 @@ func (s *server) limit(r *http.Request) bool {
 func (s *server) succeeded(r *http.Request) {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	delete(s.attempts, host)
+	delete(s.attempts, s.clientIP(r))
+}
+
+// loginFailed answers a failed credential check. Once many failures pile up
+// across all addresses, failures (not correct logins) are slowed down, so a
+// distributed guesser is throttled without ever locking the owner out.
+func (s *server) loginFailed(w http.ResponseWriter, message string) {
+	s.authMu.Lock()
+	now := time.Now()
+	if now.After(s.globalUntil) {
+		s.globalFails = 0
+		s.globalUntil = now.Add(15 * time.Minute)
+	}
+	s.globalFails++
+	over := s.globalFails - 20
+	s.authMu.Unlock()
+	if over > 0 {
+		delay := time.Duration(over) * 250 * time.Millisecond
+		if delay > 3*time.Second {
+			delay = 3 * time.Second
+		}
+		time.Sleep(delay)
+	}
+	fail(w, 401, message)
+}
+
+// confirmPassword checks the owner's password for actions that must not be
+// possible with a session alone. It writes the error response itself.
+func (s *server) confirmPassword(w http.ResponseWriter, r *http.Request, password string) bool {
+	var hash string
+	if len(password) > 72 || s.db.QueryRowContext(r.Context(), "SELECT password_hash FROM users WHERE id=1").Scan(&hash) != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		s.loginFailed(w, "Your password did not match.")
+		return false
+	}
+	return true
 }
 func (s *server) newSession(w http.ResponseWriter, r *http.Request) error {
 	s.succeeded(r)
@@ -143,11 +179,11 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	e := s.db.QueryRowContext(r.Context(), "SELECT password_hash,totp_secret,totp_last_step FROM users WHERE id=1 AND username=$1", in.Username).Scan(&hash, &secret, &last)
 	if e != nil {
 		bcrypt.CompareHashAndPassword([]byte("$2a$12$QERZC3cr1kjMRovx5EcaQee6Pf08FgvYsUzKHrjGAOjfxGBKaGlR."), []byte(in.Password))
-		fail(w, 401, "Check your username, password, and authenticator code.")
+		s.loginFailed(w, "Check your username, password, and authenticator code.")
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)) != nil {
-		fail(w, 401, "Check your username, password, and authenticator code.")
+		s.loginFailed(w, "Check your username, password, and authenticator code.")
 		return
 	}
 	if secret.Valid && secret.String != "" {
@@ -155,7 +191,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		step := time.Now().Unix() / 30
 		valid, ve := totp.ValidateCustom(in.Code, plain, time.Now(), totp.ValidateOpts{Period: 30, Skew: 0, Digits: 6})
 		if e != nil || ve != nil || !valid || step <= last {
-			fail(w, 401, "Check your username, password, and authenticator code.")
+			s.loginFailed(w, "Check your username, password, and authenticator code.")
 			return
 		}
 		result, e := s.db.ExecContext(r.Context(), "UPDATE users SET totp_last_step=$1 WHERE id=1 AND totp_last_step<$1", step)
@@ -165,7 +201,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		}
 		n, _ := result.RowsAffected()
 		if n != 1 {
-			fail(w, 401, "Use a fresh authenticator code.")
+			s.loginFailed(w, "Use a fresh authenticator code.")
 			return
 		}
 	}
@@ -185,6 +221,19 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	respond(w, map[string]bool{"ok": true})
 }
 func (s *server) totpSetup(w http.ResponseWriter, r *http.Request) {
+	if !s.limit(r) {
+		fail(w, 429, "Too many attempts. Try again in 15 minutes.")
+		return
+	}
+	var in struct{ Password string }
+	if decode(r, &in) != nil {
+		fail(w, 400, "Enter your password to continue.")
+		return
+	}
+	if !s.confirmPassword(w, r, in.Password) {
+		return
+	}
+	s.succeeded(r)
 	var username string
 	var existing sql.NullString
 	if e := s.db.QueryRowContext(r.Context(), "SELECT username,totp_secret FROM users WHERE id=1").Scan(&username, &existing); e != nil {
@@ -211,9 +260,12 @@ func (s *server) totpConfirm(w http.ResponseWriter, r *http.Request) {
 		fail(w, 429, "Too many attempts. Try again later.")
 		return
 	}
-	var in struct{ Code string }
+	var in struct{ Code, Password string }
 	if decode(r, &in) != nil {
 		fail(w, 400, "Invalid code.")
+		return
+	}
+	if !s.confirmPassword(w, r, in.Password) {
 		return
 	}
 	var encrypted string
@@ -258,7 +310,7 @@ func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	var hash string
 	if e := s.db.QueryRowContext(r.Context(), "SELECT password_hash FROM users WHERE id=1").Scan(&hash); e != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Current)) != nil {
-		fail(w, 401, "Your current password did not match.")
+		s.loginFailed(w, "Your current password did not match.")
 		return
 	}
 	next, e := bcrypt.GenerateFromPassword([]byte(in.Next), 12)
@@ -275,6 +327,10 @@ func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	if _, e = tx.ExecContext(r.Context(), "UPDATE users SET password_hash=$1 WHERE id=1", string(next)); e == nil {
 		_, e = tx.ExecContext(r.Context(), "DELETE FROM sessions WHERE token_hash<>$1", hashToken(c.Value))
+	}
+	if e == nil {
+		// Other devices are signed out, so their notification subscriptions go too.
+		_, e = tx.ExecContext(r.Context(), "DELETE FROM push_subscriptions")
 	}
 	if e != nil || tx.Commit() != nil {
 		fail(w, 500, "Could not change password.")
@@ -305,7 +361,7 @@ func (s *server) totpDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	plain, e := s.unseal(secret.String)
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)) != nil || e != nil || !totp.Validate(in.Code, plain) {
-		fail(w, 401, "Check your password and authenticator code.")
+		s.loginFailed(w, "Check your password and authenticator code.")
 		return
 	}
 	if _, e = s.db.ExecContext(r.Context(), "UPDATE users SET totp_secret=NULL,totp_pending=NULL,totp_last_step=0 WHERE id=1"); e != nil {
