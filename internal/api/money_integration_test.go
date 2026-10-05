@@ -129,3 +129,57 @@ func TestS10_OverspendFlowAPI(t *testing.T) {
 	c.must("POST", "/api/v1/uncovered/settle", `{"source":"uncovered","amount":100}`, 400)
 	c.must("POST", "/api/v1/uncovered/settle", `{"source":"savings","amount":100}`, 200)
 }
+
+func TestS19_8_PreviewWritesNothingAndMatchesApplied(t *testing.T) {
+	c, acct := moneyClient(t)
+	bonus := c.must("POST", "/api/v1/transactions", fmt.Sprintf(`{"account_id":%q,"date":"2026-09-20","amount":150000,"description":"BONUS"}`, acct), 201)
+	c.must("PATCH", "/api/v1/transactions/"+str(bonus["id"]), `{"category_id":"one_time_income","reviewed":true}`, 200)
+	c.must("GET", "/api/v1/home", "", 200) // settle snapshots
+	count := func(table string) int {
+		var n int
+		c.srv.DB.QueryRow(`SELECT count(*) FROM ` + table).Scan(&n)
+		return n
+	}
+	events, snaps := count("events"), count("month_snapshots")
+	body := `{"month":"2026-10","allocations":[{"dest":"savings","amount":100000},{"dest":"spending","amount":50000,"permanent":true}]}`
+	pv := c.must("POST", "/api/v1/preview", body, 200)
+	if count("events") != events || count("month_snapshots") != snaps {
+		t.Fatal("a preview writes nothing")
+	}
+	before, after := pv["before"].(map[string]any), pv["after"].(map[string]any)
+	if before["uncategorized"] != float64(150000) || after["uncategorized"] != float64(100000) {
+		t.Fatalf("raising spend_base by 500 leaves 1000 in the pot: %v %v", before, after)
+	}
+	if after["spend_base"] != float64(400000+50000) {
+		t.Fatalf("a permanent allocation to spending raises spend_base: %v", after)
+	}
+	c.must("POST", "/api/v1/preview", `{"allocations":[{"dest":"bogus","amount":5}]}`, 400)
+	c.must("POST", "/api/v1/preview", `{"month":"nope"}`, 400)
+
+	// applying the same change gives what the preview said
+	c.must("POST", "/api/v1/months/2026-10/allocations", `{"items":[{"dest":"savings","amount":100000},{"dest":"spending","amount":50000,"permanent":true}]}`, 200)
+	h := c.must("GET", "/api/v1/home", "", 200)
+	if int64(h["spend_left"].(float64)) != int64(after["spend_left"].(float64)) {
+		t.Fatalf("applied spend_left %v differs from the preview %v", h["spend_left"], after["spend_left"])
+	}
+}
+
+func TestS19_11_ChecklistMatchesPlannedCredits(t *testing.T) {
+	c, acct := moneyClient(t)
+	c.must("PUT", "/api/v1/settings/savings", `{"fixed":30000,"basis_points":0,"use_basis_points":false}`, 200)
+	c.must("POST", "/api/v1/goals", `{"name":"Phone","target":500000,"monthly":10000}`, 201)
+	ck := c.must("GET", "/api/v1/rollover/checklist", "", 200)
+	if ck["planned"] != float64(40000) || ck["remaining"] != float64(40000) || len(ck["items"].([]any)) != 2 {
+		t.Fatalf("savings 300 and the phone goal 100: %v", ck)
+	}
+	// a matching transfer verifies it automatically
+	tr := c.must("POST", "/api/v1/transactions", fmt.Sprintf(`{"account_id":%q,"date":"2026-10-02","amount":-30000,"description":"TO SAVINGS"}`, acct), 201)
+	c.must("PATCH", "/api/v1/transactions/"+str(tr["id"]), `{"category_id":"general_savings","reviewed":true}`, 200)
+	if ck = c.must("GET", "/api/v1/rollover/checklist", "", 200); ck["verified"] != float64(30000) || ck["remaining"] != float64(10000) {
+		t.Fatalf("auto-verified by the transfer: %v", ck)
+	}
+	c.must("POST", "/api/v1/months/2026-10/moved-it", `{"amount":10000}`, 200)
+	if ck = c.must("GET", "/api/v1/rollover/checklist", "", 200); ck["remaining"] != float64(0) {
+		t.Fatalf("i moved it: %v", ck)
+	}
+}

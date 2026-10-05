@@ -146,6 +146,9 @@ func (s *server) routes() {
 	m.Handle("POST /api/v1/overspends/{ym}/covers", s.protect(s.idempotent(s.cover)))
 	m.Handle("POST /api/v1/uncovered/settle", s.protect(s.idempotent(s.settle)))
 
+	m.Handle("POST /api/v1/preview", s.protect(s.preview))
+	m.Handle("GET /api/v1/rollover/checklist", s.protect(s.checklist))
+
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Unknown endpoint.")
 	})

@@ -28,6 +28,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
 	"github.com/alec-jensen/sofar/internal/recompute"
+	"github.com/alec-jensen/sofar/internal/rollover"
 	"github.com/alec-jensen/sofar/internal/store"
 )
 
@@ -149,28 +150,16 @@ func serve(args []string) error {
 	defer db.Close()
 
 	m := metrics.New(version)
-	if *runWorker {
-		q := jobs.NewQueue(db, log)
-		q.OnResult = m.JobDone
-		sched := jobs.NewScheduler(db, log, cfg.HomeTZ)
-		go q.Run(ctx, 5*time.Second)
-		go sched.Run(ctx, time.Minute)
-		log.Info().Msg("worker started")
-	}
-	if !*runAPI {
-		<-ctx.Done()
-		return nil
-	}
-
 	box, err := crypt.New(cfg.EncryptionKey)
 	if err != nil {
 		return err
 	}
-	h := api.New(api.WithDomain(api.Deps{
+	push := &notify.Sender{DB: db, Client: netguard.NewOutboundClient(), Public: cfg.VAPIDPublic, Private: cfg.VAPIDPrivate, Subject: orDefault(cfg.VAPIDSubject, "mailto:admin@example.com"), Log: log}
+	deps := api.WithDomain(api.Deps{
 		Cfg:     cfg,
 		DB:      db,
 		Auth:    auth.New(db, box, cfg.SetupKey),
-		Push:    &notify.Sender{DB: db, Client: netguard.NewOutboundClient(), Public: cfg.VAPIDPublic, Private: cfg.VAPIDPrivate, Subject: orDefault(cfg.VAPIDSubject, "mailto:admin@example.com"), Log: log},
+		Push:    push,
 		Log:     log,
 		Metrics: m.Handler(),
 		Ready: func(ctx context.Context) error {
@@ -186,7 +175,28 @@ func serve(args []string) error {
 			}
 			return nil
 		},
-	}))
+	})
+	if *runWorker {
+		q := jobs.NewQueue(db, log)
+		q.OnResult = m.JobDone
+		q.Register(rollover.Kind, rollover.Handler(deps.Recompute, func(ctx context.Context, title, body string) error {
+			if !push.Configured() {
+				return nil
+			}
+			_, err := push.Send(ctx, notify.Payload{Title: title, Body: body, URL: "/", Tag: "sofar-rollover"}, 86400)
+			return err
+		}))
+		sched := jobs.NewScheduler(db, log, cfg.HomeTZ)
+		sched.Add(rollover.Periodic())
+		go q.Run(ctx, 5*time.Second)
+		go sched.Run(ctx, time.Minute)
+		log.Info().Msg("worker started")
+	}
+	if !*runAPI {
+		<-ctx.Done()
+		return nil
+	}
+	h := api.New(deps)
 	srv := &http.Server{Addr: cfg.Bind, Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	go func() {
 		<-ctx.Done()

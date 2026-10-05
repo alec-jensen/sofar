@@ -314,3 +314,54 @@ func (s *Service) dirtySet(ctx context.Context, q events.DBTX) (map[civil.YearMo
 	}
 	return out, rows.Err()
 }
+
+// PreviewResult is a month computed before and after a proposed change, with the next month's.
+type PreviewResult struct {
+	Before, After         budget.MonthState
+	NextBefore, NextAfter budget.MonthState
+}
+
+// Preview computes a month (and the next) as it is and as it would be after
+// mutate changes its inputs. It reads the stored previous month, runs
+// ComputeMonth in memory, and writes nothing (S19.8).
+func (s *Service) Preview(ctx context.Context, ym civil.YearMonth, mutate func(*budget.MonthInputs)) (PreviewResult, error) {
+	var res PreviewResult
+	d, err := s.load(ctx, s.DB)
+	if err != nil {
+		return res, err
+	}
+	var prev *budget.MonthState
+	if snap, err := s.GetSnapshot(ctx, s.DB, ym.Prev()); err == nil {
+		prev = &snap.State
+	}
+	in, err := s.assemble(ctx, s.DB, d, ym)
+	if err != nil {
+		return res, err
+	}
+	next, err := s.assemble(ctx, s.DB, d, ym.Next())
+	if err != nil {
+		return res, err
+	}
+	res.Before = budget.ComputeMonth(prev, in)
+	res.NextBefore = budget.ComputeMonth(&res.Before, next)
+	changed := in
+	changed.Events = append([]budget.Event(nil), in.Events...)
+	changed.Lines.Standing = append([]budget.StandingLine(nil), in.Lines.Standing...)
+	mutate(&changed)
+	res.After = budget.ComputeMonth(prev, changed)
+	nextChanged := next
+	nextChanged.Lines.Standing = append(append([]budget.StandingLine(nil), next.Lines.Standing...), newStanding(in, changed)...)
+	res.NextAfter = budget.ComputeMonth(&res.After, nextChanged)
+	return res, nil
+}
+
+// newStanding finds permanent allocations the mutation added: they become standing lines next month.
+func newStanding(before, after budget.MonthInputs) []budget.StandingLine {
+	var out []budget.StandingLine
+	for _, e := range after.Events[len(before.Events):] {
+		if e.Kind == budget.EvAllocation && e.Permanent && e.Dest != budget.EnvSpendPool && e.Amount > 0 {
+			out = append(out, budget.StandingLine{ID: "preview", Amount: e.Amount, Dest: e.Dest, Since: after.Month})
+		}
+	}
+	return out
+}

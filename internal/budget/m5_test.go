@@ -233,3 +233,25 @@ func TestA9_Inv6_RolloverTwiceSame(t *testing.T) {
 func TestA9_Inv14_RejectTentativeRevertsExactly(t *testing.T) {
 	t.Skip("needs links, M7")
 }
+
+func TestS10_ReassignAutoCarryRefunds(t *testing.T) {
+	// March overspends by 180 and nothing is decided: April carries it
+	build := func(cover bool) MonthState {
+		s := newScenario(t).withFixed(usd(2000))
+		s.keep = true
+		s.month("2026-02").prevIncome(usd(4000)).run()
+		m := s.month("2026-03").prevIncome(usd(4000)).spend(usd(2180))
+		if cover {
+			m = m.cover(EnvSavings, usd(180))
+		}
+		m.run()
+		return s.month("2026-04").prevIncome(usd(4000)).run()
+	}
+	carried, resolved := build(false), build(true)
+	if carried.Deductions != usd(180) || !carried.Has(FlagAutoCarried) {
+		t.Fatalf("unresolved overspend auto-carries: %+v", carried)
+	}
+	if resolved.Deductions != 0 || resolved.Has(FlagAutoCarried) {
+		t.Fatalf("a later cover for March refunds the carry: %+v", resolved)
+	}
+}
