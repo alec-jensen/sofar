@@ -82,6 +82,9 @@ const (
 	KindSweepUnderage = "sweep_underage"
 	KindCarry         = "carry"
 	KindOpening       = "opening_balance"
+	KindCover         = "cover"
+	KindSettle        = "settle"
+	KindCapExcess     = "cap_excess"
 )
 
 // Line is one fixed amount reserved for a month.
@@ -89,6 +92,8 @@ type Line struct {
 	ID     string
 	Label  string
 	Amount money.Cents
+	// Target caps a goal: what is above it goes to general savings (S7). Zero means no cap.
+	Target money.Cents
 }
 
 // StandingLine is a recurring allocation created earlier by a permanent
@@ -139,6 +144,10 @@ const (
 	EvOpening EventKind = "opening_balance"
 	// EvMove moves money between persistent envelopes (From -> To) outside the plan.
 	EvMove EventKind = "move"
+	// EvSettle pays down uncovered overspending from Source (S10.5).
+	EvSettle EventKind = "settle"
+	// EvMovedIt is the user saying "I moved it": verifies planned savings by hand (S7).
+	EvMovedIt EventKind = "moved_it"
 )
 
 // Event is a budget decision in force for a month.
@@ -210,14 +219,20 @@ type Flag struct {
 
 // Flag kinds.
 const (
-	FlagOvercommitted    = "overcommitted"
-	FlagAutoCarried      = "auto_carried"
-	FlagLearning         = "learning"
-	FlagPartial          = "partial"
-	FlagPinned           = "spend_base_pinned"
-	FlagTakeBack         = "take_back"
-	FlagOverAllocated    = "pot_over_allocated"
-	FlagRebuildFromFixed = "rebuild_reduces_spending"
+	FlagOvercommitted     = "overcommitted"
+	FlagAutoCarried       = "auto_carried"
+	FlagLearning          = "learning"
+	FlagPartial           = "partial"
+	FlagPinned            = "spend_base_pinned"
+	FlagTakeBack          = "take_back"
+	FlagOverAllocated     = "pot_over_allocated"
+	FlagRebuildFromFixed  = "rebuild_reduces_spending"
+	FlagUnverifiedSavings = "unverified_savings"
+	FlagBorrowedGoal      = "borrowed_goal"
+	FlagEFUsed            = "ef_used"
+	FlagGoalPurchased     = "goal_purchased"
+	FlagCoverClamped      = "cover_clamped"
+	FlagBillsGap          = "bills_gap"
 )
 
 // MonthInputs is everything ComputeMonth needs for one month. The impure
@@ -231,6 +246,8 @@ type MonthInputs struct {
 	Partial          bool
 	Lines            FixedLines
 	TrailingOutflow  [3]money.Cents // actual bills+spending of the last 3 months (EF target)
+	EFMonths         int            // N in the EF target, default 3
+	EFTargetOverride *money.Cents   // a fixed EF target in cents
 	AbsorptionCauses []Cause
 	Events           []Event
 	Outflows         []Outflow
@@ -266,6 +283,13 @@ type MonthState struct {
 	OverspendGross money.Cents
 	CoversApplied  money.Cents
 	OverspendOpen  money.Cents
+
+	// SavingsPlanned is what should move into real savings this month (general
+	// savings, goals and the EF); SavingsVerified is what matching transfers and
+	// "i moved it" have confirmed (S7).
+	SavingsPlanned  money.Cents
+	SavingsVerified money.Cents
+	EFTarget        money.Cents
 
 	Income        money.Cents
 	BillsUnderage money.Cents // unspent monthly bill and subscription reserve, swept to savings next month

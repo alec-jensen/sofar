@@ -27,17 +27,25 @@ func chain(t *rapid.T) []MonthInputs {
 			in.Lines.Bills = []Line{{ID: "b1", Amount: cents("bill", 400_000)}}
 		}
 		in.Lines.Savings = SavingsRule{Fixed: cents("savings", 100_000)}
+		in.Lines.Goals = []Line{{ID: "g", Amount: cents("goal", 50_000), Target: cents("target", 200_000)}}
 		if rapid.IntRange(0, 4).Draw(t, "standing") == 0 {
 			in.Lines.Standing = []StandingLine{{ID: "s", Amount: cents("standing", 100_000), Dest: EnvSavings}}
 		}
 		for e, ne := 0, rapid.IntRange(0, 4).Draw(t, "events"); e < ne; e++ {
 			seq++
 			ev := Event{ID: seq, At: time.Date(2026, ym.M, 1, 0, 0, int(seq%60), 0, time.UTC)}
-			switch rapid.IntRange(0, 3).Draw(t, "kind") {
+			switch rapid.IntRange(0, 5).Draw(t, "kind") {
 			case 0:
 				ev.Kind, ev.Amount = EvSpendBaseEdit, cents("edit", 800_000)
 			case 1:
 				ev.Kind = EvPinRemoved
+			case 3:
+				ev.Kind, ev.Source = EvCover, rapid.SampledFrom([]EnvelopeID{EnvSavings, EnvEF, EnvNextMonth, EnvUncovered, EnvBillsReserve, Goal("g")}).Draw(t, "source")
+				ev.Amount = cents("cover", 400_000)
+			case 4:
+				ev.Kind, ev.Source, ev.Amount = EvSettle, rapid.SampledFrom([]EnvelopeID{EnvSavings, EnvEF}).Draw(t, "settleFrom"), cents("settle", 300_000)
+			case 5:
+				ev.Kind, ev.Amount = EvMovedIt, cents("moved", 100_000)
 			default:
 				ev.Kind, ev.Dest, ev.Amount = EvAllocation, rapid.SampledFrom(dests).Draw(t, "dest"), cents("alloc", 300_000)
 				ev.Permanent = rapid.Bool().Draw(t, "perm")
@@ -46,10 +54,13 @@ func chain(t *rapid.T) []MonthInputs {
 		}
 		for o, no := 0, rapid.IntRange(0, 6).Draw(t, "outflows"); o < no; o++ {
 			seq++
-			bucket := rapid.SampledFrom([]string{BucketSpending, BucketSpending, BucketBills, BucketNeutral}).Draw(t, "bucket")
+			bucket := rapid.SampledFrom([]string{BucketSpending, BucketSpending, BucketBills, BucketNeutral, BucketSavings, BucketGoalPurchase}).Draw(t, "bucket")
 			out := Outflow{ID: "o", Seq: seq, Date: civil.Date{Y: ym.Y, M: ym.M, D: rapid.IntRange(1, 28).Draw(t, "day")}, Bucket: bucket, Amount: cents("spend", 300_000) + 1}
 			if bucket == BucketBills {
 				out.LineID = "b1"
+			}
+			if bucket == BucketGoalPurchase {
+				out.GoalID = "g"
 			}
 			out.FromDiscretionary = bucket == BucketSpending && rapid.IntRange(0, 5).Draw(t, "fd") == 0
 			in.Outflows = append(in.Outflows, out)
@@ -195,6 +206,19 @@ func TestA9_Inv13_InputsAreNotModified(t *testing.T) {
 				if c[i].Outflows[j] != before[i].Outflows[j] {
 					t.Fatal("ComputeMonth reordered or changed the caller's outflows")
 				}
+			}
+		}
+	})
+}
+
+func TestA9_CoversNeverExceedOverspend(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		for i, s := range run(chain(t)) {
+			if s.CoversApplied > s.OverspendGross || s.CoversApplied < 0 || s.OverspendOpen < 0 || s.OverspendOpen != s.OverspendGross-s.CoversApplied {
+				t.Fatalf("month %d: gross %v covers %v open %v", i, s.OverspendGross, s.CoversApplied, s.OverspendOpen)
+			}
+			if s.Envelopes[EnvUncovered] < 0 {
+				t.Fatalf("month %d: uncovered debt went negative: %v", i, s.Envelopes[EnvUncovered])
 			}
 		}
 	})

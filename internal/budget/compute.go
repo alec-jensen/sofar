@@ -11,10 +11,11 @@ import (
 )
 
 type computer struct {
-	in   MonthInputs
-	prev *MonthState
-	st   MonthState
-	env  map[EnvelopeID]money.Cents
+	poolAvail money.Cents
+	in        MonthInputs
+	prev      *MonthState
+	st        MonthState
+	env       map[EnvelopeID]money.Cents
 }
 
 func (c *computer) entry(from, to EnvelopeID, amount money.Cents, kind, ref string) {
@@ -53,6 +54,9 @@ func ComputeMonth(prev *MonthState, in MonthInputs) MonthState {
 	c.pot()
 	c.pool()
 	c.outflows()
+	c.covers()
+	c.caps()
+	c.verification()
 	c.perDay()
 	c.finish()
 	return c.st
@@ -206,6 +210,7 @@ func (c *computer) fixed() {
 		c.env[s.Dest] += s.Amount
 	}
 	c.st.Fixed = fixed
+	c.st.SavingsPlanned = remaining + sumLines(l.Goals) + l.EF.Amount + rebuildTotal
 }
 
 // spendBase is step 4b: first plan, or absorption against the data-driven
@@ -243,6 +248,16 @@ func (c *computer) events() {
 			c.st.PinnedSpendBase = e.Amount
 		case EvPinRemoved:
 			c.st.PinnedSpendBase = 0
+		case EvMovedIt:
+			c.st.SavingsVerified += money.Max(0, e.Amount)
+		case EvSettle:
+			// pay down explicit uncovered debt from a source envelope (S10.5)
+			pay := money.Min(money.Max(0, e.Amount), money.Max(0, c.env[EnvUncovered]))
+			if pay > 0 && e.Source != "" {
+				c.env[e.Source] -= pay
+				c.env[EnvUncovered] -= pay
+				c.entry(e.Source, EnvUncovered, pay, KindSettle, e.Ref)
+			}
 		case EvOpening:
 			if e.Amount != 0 && e.Dest != "" {
 				c.env[e.Dest] += e.Amount
@@ -411,11 +426,24 @@ func (c *computer) outflows() {
 			if over := o.Amount - take; over > 0 {
 				draw(over, o.ID)
 			}
-		default: // savings, goal purchases and neutral movements are handled in M5
+		case BucketSavings:
+			// a savings transfer verifies the planned savings; it does not draw (S7)
+			st.SavingsVerified += o.Amount
+		case BucketGoalPurchase:
+			bal := money.Max(0, c.env[Goal(o.GoalID)])
+			fromGoal := money.Min(o.Amount, bal)
+			c.env[Goal(o.GoalID)] -= fromGoal
+			c.entry(Goal(o.GoalID), EnvWorld, fromGoal, KindSpend, o.ID)
+			if rest := o.Amount - fromGoal; rest > 0 {
+				draw(rest, o.ID)
+			}
+			st.Flags = append(st.Flags, Flag{Kind: FlagGoalPurchased, Ref: o.GoalID, Amount: c.env[Goal(o.GoalID)]})
+		default: // neutral movements (transfers, card payments, loan proceeds) do nothing
 		}
 	}
+	c.poolAvail = poolAvail
 	st.SpendLeft = poolAvail
-	st.OverspendOpen = st.OverspendGross - st.CoversApplied
+	st.OverspendOpen = st.OverspendGross
 	c.env[EnvDiscretionary] = disc
 	var ids []string
 	for id := range reserve {
@@ -457,4 +485,105 @@ func (c *computer) finish() {
 	}{h, c.in, EngineVersion})
 	sum := sha256.Sum256(raw)
 	c.st.InputHash = hex.EncodeToString(sum[:])
+}
+
+// covers is step 4h: this month's covers, applied in event order after
+// clamping to the overspend (A-006: when a refund shrinks the overspend the
+// newest covers shrink first).
+func (c *computer) covers() {
+	st := &c.st
+	var cs []Event
+	var total money.Cents
+	for _, e := range c.in.Events {
+		if e.Kind == EvCover && e.Amount > 0 && e.Source != "" {
+			cs = append(cs, e)
+			total += e.Amount
+		}
+	}
+	if over := total - st.OverspendGross; over > 0 {
+		for i := len(cs) - 1; i >= 0 && over > 0; i-- {
+			cut := money.Min(over, cs[i].Amount)
+			cs[i].Amount -= cut
+			over -= cut
+		}
+		st.Flags = append(st.Flags, Flag{Kind: FlagCoverClamped, Amount: total - st.OverspendGross})
+	}
+	for _, e := range cs {
+		a := e.Amount
+		if a <= 0 {
+			continue
+		}
+		st.CoversApplied += a
+		switch {
+		case e.Source == EnvNextMonth:
+			c.poolAvail += a
+			st.CarryToNext += a
+			c.entry(EnvNextMonth, EnvSpendPool, a, KindCover, e.Ref)
+		case e.Source == EnvUncovered:
+			c.env[EnvUncovered] += a // an explicit "leave uncovered" is a debt, not a deduction (A-003)
+			c.entry(EnvUncovered, EnvSpendPool, a, KindCover, e.Ref)
+		case e.Source == EnvBillsReserve:
+			c.poolAvail += a
+			c.env[EnvBillsGap] += a
+			st.Flags = append(st.Flags, Flag{Kind: FlagBillsGap, Amount: a})
+			c.entry(EnvBillsReserve, EnvSpendPool, a, KindCover, e.Ref)
+		default: // savings, a goal, or the EF
+			c.poolAvail += a
+			c.env[e.Source] -= a
+			c.entry(e.Source, EnvSpendPool, a, KindCover, e.Ref)
+			switch {
+			case e.Source.isGoal():
+				st.Flags = append(st.Flags, Flag{Kind: FlagBorrowedGoal, Ref: string(e.Source), Amount: a})
+			case e.Source == EnvEF:
+				st.Flags = append(st.Flags, Flag{Kind: FlagEFUsed, Amount: a})
+			}
+		}
+	}
+	st.SpendLeft = c.poolAvail
+	st.OverspendOpen = st.OverspendGross - st.CoversApplied
+}
+
+// caps sends what a goal holds above its target, and the EF above its target,
+// to general savings (S7, S8).
+func (c *computer) caps() {
+	for _, g := range c.in.Lines.Goals {
+		if g.Target > 0 {
+			if over := c.env[Goal(g.ID)] - g.Target; over > 0 {
+				c.env[Goal(g.ID)] -= over
+				c.env[EnvSavings] += over
+				c.entry(Goal(g.ID), EnvSavings, over, KindCapExcess, g.ID)
+			}
+		}
+	}
+	months := c.in.EFMonths
+	if months <= 0 {
+		months = 3
+	}
+	var target money.Cents
+	if c.in.EFTargetOverride != nil {
+		target = *c.in.EFTargetOverride
+	} else {
+		var sum money.Cents
+		for _, t := range c.in.TrailingOutflow {
+			sum += t
+		}
+		target = sum * money.Cents(months) / 3
+	}
+	c.st.EFTarget = target
+	if target > 0 {
+		if over := c.env[EnvEF] - target; over > 0 {
+			c.env[EnvEF] -= over
+			c.env[EnvSavings] += over
+			c.entry(EnvEF, EnvSavings, over, KindCapExcess, "ef")
+		}
+	}
+}
+
+// verification flags planned savings that no transfer or "i moved it" has
+// confirmed once the month is over (S7). The current month is never flagged.
+func (c *computer) verification() {
+	st := &c.st
+	if c.in.Today == nil && st.SavingsPlanned > 0 && st.SavingsVerified < st.SavingsPlanned {
+		st.Flags = append(st.Flags, Flag{Kind: FlagUnverifiedSavings, Amount: st.SavingsPlanned - st.SavingsVerified})
+	}
 }

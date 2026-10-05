@@ -190,10 +190,6 @@ func TestS2_LeftoverPoolSweepsToSavings(t *testing.T) { // A-002
 	}
 }
 
-func TestS2_ExampleE_Overspend(t *testing.T) {
-	t.Skip("M5: covers")
-}
-
 func TestS2_ExampleF_ReimbursementAcrossMonths(t *testing.T) {
 	t.Skip("M7: links")
 }
