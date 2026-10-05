@@ -22,10 +22,14 @@ import (
 	"github.com/alec-jensen/sofar/internal/crypt"
 	"github.com/alec-jensen/sofar/internal/jobs"
 	"github.com/alec-jensen/sofar/internal/logging"
+	"github.com/alec-jensen/sofar/internal/metrics"
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
 	"github.com/alec-jensen/sofar/internal/store"
 )
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
 
 const usage = `usage: sofar <command>
 
@@ -138,8 +142,10 @@ func serve(args []string) error {
 	}
 	defer db.Close()
 
+	m := metrics.New(version)
 	if *runWorker {
 		q := jobs.NewQueue(db, log)
+		q.OnResult = m.JobDone
 		sched := jobs.NewScheduler(db, log, cfg.HomeTZ)
 		go q.Run(ctx, 5*time.Second)
 		go sched.Run(ctx, time.Minute)
@@ -155,11 +161,12 @@ func serve(args []string) error {
 		return err
 	}
 	h := api.New(api.Deps{
-		Cfg:  cfg,
-		DB:   db,
-		Auth: auth.New(db, box, cfg.SetupKey),
-		Push: &notify.Sender{DB: db, Client: netguard.NewOutboundClient(), Public: cfg.VAPIDPublic, Private: cfg.VAPIDPrivate, Subject: orDefault(cfg.VAPIDSubject, "mailto:admin@example.com"), Log: log},
-		Log:  log,
+		Cfg:     cfg,
+		DB:      db,
+		Auth:    auth.New(db, box, cfg.SetupKey),
+		Push:    &notify.Sender{DB: db, Client: netguard.NewOutboundClient(), Public: cfg.VAPIDPublic, Private: cfg.VAPIDPrivate, Subject: orDefault(cfg.VAPIDSubject, "mailto:admin@example.com"), Log: log},
+		Log:     log,
+		Metrics: m.Handler(),
 		Ready: func(ctx context.Context) error {
 			if err := db.PingContext(ctx); err != nil {
 				return err

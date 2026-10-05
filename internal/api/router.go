@@ -12,6 +12,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/auth"
 	"github.com/alec-jensen/sofar/internal/config"
 	"github.com/alec-jensen/sofar/internal/httpx"
+	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
 )
 
@@ -23,6 +24,8 @@ type Deps struct {
 	Throttle *auth.Throttle
 	Push     *notify.Sender
 	Log      zerolog.Logger
+	// Metrics, when set, is served at /metrics to loopback callers and signed-in users.
+	Metrics http.Handler
 	// Ready reports whether the database is reachable and migrations are current.
 	Ready func(ctx context.Context) error
 }
@@ -46,6 +49,7 @@ func (s *server) routes() {
 	m := s.mux
 	m.HandleFunc("GET /healthz", s.healthz)
 	m.HandleFunc("GET /readyz", s.readyz)
+	m.HandleFunc("GET /metrics", s.metrics)
 
 	// auth (public)
 	m.HandleFunc("GET /api/v1/auth/status", s.authStatus)
@@ -84,4 +88,26 @@ func (s *server) readyz(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httpx.Respond(w, map[string]bool{"ok": true})
+}
+
+// metrics is reachable from this machine (a scraper on loopback) or by a
+// signed-in owner, never anonymously from the network.
+func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
+	if s.Metrics == nil {
+		httpx.Fail(w, http.StatusNotFound, "not_found", "Unknown endpoint.")
+		return
+	}
+	if !netguard.IsLoopbackPeer(r) {
+		ok := false
+		if s.Auth != nil {
+			var err error
+			ok, err = s.Auth.Authenticate(r.Context(), s.token(r))
+			ok = ok && err == nil
+		}
+		if !ok {
+			httpx.Fail(w, http.StatusUnauthorized, "unauthenticated", "Please sign in to continue.")
+			return
+		}
+	}
+	s.Metrics.ServeHTTP(w, r)
 }

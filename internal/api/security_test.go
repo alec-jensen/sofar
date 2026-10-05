@@ -1,6 +1,9 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"github.com/alec-jensen/sofar/internal/metrics"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,5 +115,40 @@ func TestS17_SecurityHeadersAndNoStoreOnAPI(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"code":"not_found"`) {
 		t.Errorf("unknown endpoints answer with the standard error shape: %s", w.Body.String())
+	}
+}
+
+func TestS19_18_ReadyzFailsWithoutDatabase(t *testing.T) {
+	h := New(Deps{Cfg: config.Config{Origin: "http://localhost:8080", StaticDir: "x"}, Log: zerolog.Nop(),
+		Ready: func(context.Context) error { return errors.New("database down") }})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/readyz", nil))
+	if w.Code != 503 {
+		t.Fatalf("readyz = %d, want 503", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/healthz", nil))
+	if w.Code != 200 {
+		t.Fatalf("healthz must stay up when the database is down, got %d", w.Code)
+	}
+}
+
+func TestS19_18_MetricsOnlyFromLoopback(t *testing.T) {
+	m := metrics.New("test")
+	m.JobDone("sync", true)
+	h := New(Deps{Cfg: config.Config{Origin: "http://localhost:8080", StaticDir: "x"}, Log: zerolog.Nop(), Metrics: m.Handler(), Auth: nil})
+	get := func(remote string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/metrics", nil)
+		r.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	local := get("127.0.0.1:5000")
+	if local.Code != 200 || !strings.Contains(local.Body.String(), `sofar_jobs_total{kind="sync",result="ok"} 1`) || !strings.Contains(local.Body.String(), "sofar_build_info") {
+		t.Fatalf("loopback should see metrics: %d %s", local.Code, local.Body.String())
+	}
+	if remote := get("203.0.113.5:80"); remote.Code != 401 {
+		t.Fatalf("an anonymous remote caller must be refused, got %d", remote.Code)
 	}
 }

@@ -49,6 +49,8 @@ type Queue struct {
 	Log  zerolog.Logger
 	Now  func() time.Time
 	Lock time.Duration // how long a picked job is held before another worker may retry it
+	// OnResult, if set, is told how each attempt ended (for metrics).
+	OnResult func(kind string, ok bool)
 
 	mu       sync.Mutex
 	handlers map[string]Handler
@@ -120,6 +122,9 @@ func (q *Queue) RunOne(ctx context.Context) (bool, error) {
 		runErr = fmt.Errorf("no handler for %q", j.Kind)
 	} else {
 		runErr = q.safely(ctx, h, j)
+	}
+	if q.OnResult != nil {
+		q.OnResult(j.Kind, runErr == nil)
 	}
 	if runErr == nil {
 		_, err = q.DB.ExecContext(ctx, `UPDATE jobs SET done_at=$2, locked_until=NULL, last_error=NULL WHERE id=$1`, j.ID, q.Now())
