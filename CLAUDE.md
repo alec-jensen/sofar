@@ -79,15 +79,16 @@ Read these on demand. Do not paste whole files into context.
 
 ## Commands
 
-Current layout (until M0 moves the frontend to `web/` and Go to `cmd/sofar`; M0.13 updates this list). The owner develops on Windows with Git Bash and Docker Desktop.
+The owner develops on Windows with Git Bash and Docker Desktop. Go is at the repo root (`cmd/sofar`, `internal/*`); the frontend is in `web/`.
 
-- Install web deps: `npm ci`
-- Web dev server: `npm run dev` (port 5173; proxies `/api` to `SOFAR_DEV_API`, default `http://127.0.0.1:8080`)
-- Web tests and build: `npm test`, `npm run build`
-- Go build, vet, test: `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l .` must print nothing
-- Integration tests: `go test -tags integration ./server -count=1` with `SOFAR_TEST_DATABASE_URL` set to an empty database in the local `sofar-db` Postgres container (or unset to download an embedded Postgres into `.cache/`)
-- Run the API locally: load the env file into the shell without reading it with a tool (`set -a; . ./.env.local; set +a` in Git Bash), override `SOFAR_ADDR=127.0.0.1:8081` (port 8080 is taken on this PC), then `go run ./server`. Start vite with `SOFAR_DEV_API=http://127.0.0.1:8081`.
-- Migrations: none yet (legacy idempotent `schema.sql`). M0.6 introduces goose: `go run ./cmd/sofar migrate up`.
+- Web deps, dev, tests, build (run in `web/`): `npm ci`, `npm run dev` (port 5173; proxies `/api` to `SOFAR_DEV_API`, default `http://127.0.0.1:8080`), `npm test`, `npm run build`
+- Go build, vet, test: `go build ./...`, `go vet ./...`, `go test ./...`; `gofmt -l cmd internal` must print nothing
+- Integration tests: `go test -tags integration ./... -count=1`. They need Postgres: set `SOFAR_TEST_DATABASE_URL` to the local `sofar-db` container's URL (each test creates and drops its own database), or leave it unset to download an embedded Postgres once.
+- Run the API locally: load the env file into the shell without reading it with a tool (`set -a; . ./.env.local; set +a` in Git Bash), override `SOFAR_ADDR=127.0.0.1:8081` (port 8080 is taken on this PC) and, for a throwaway database, `DATABASE_URL` and `SOFAR_ENV=development`, then `go run ./cmd/sofar serve` (flags `--api`, `--worker`, both on by default). Start vite with `SOFAR_DEV_API=http://127.0.0.1:8081`.
+- Migrations (goose, embedded in the binary, run automatically on `serve`): `go run ./cmd/sofar migrate up`, `go run ./cmd/sofar migrate status`. First migration quarantines legacy tables into schema `legacy`; never drop it.
+- Web Push keys: `go run ./cmd/sofar vapid`
+- API contract: `api/openapi.yaml` is the source of truth; every response in the API tests is validated against it.
+- Docker: `docker build .`, `docker compose up` (needs `.env`; see `compose.yaml`)
 
 ## Definition of done (every task)
 

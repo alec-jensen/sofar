@@ -25,8 +25,11 @@ Every tunable default lives here and is exposed in settings. Add a row whenever 
 | first-pass accuracy targets | 90% by day 30, 95% by day 90 | S18a | release gate |
 | audit mode | off | S18a | |
 | AI assistant | off, aggregates only | S19.17 | |
-| session length | 30 days sliding | S19.19 | |
-| recovery codes | 8 | S19.19 | |
+| session length | 30 days sliding | S19.19 | `last_seen_at` is written at most once an hour per session |
+| recovery codes | 8, one use each | S19.19 | shown once, stored bcrypt-hashed; replaced on regeneration |
+| login attempts | 10 per address per 15 minutes | S19.19 | a success clears them; after 20 failures overall, failures are delayed up to 3 s |
+| job retry backoff | 30 s doubling, capped at 6 h | A7 | |
+| idempotency key retention | until purged | A6 | a purge job comes later |
 | gamification level | full | S19.25 | off, quiet, full |
 | celebration intensity | 2 | S19.25 | 0 to 3 |
 | celebration taper | on | S19.25 | quieter over time |
