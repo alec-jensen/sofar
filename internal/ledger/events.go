@@ -15,6 +15,11 @@ const (
 	KindSetReviewed          = "overlay.set_reviewed"
 	KindSetType              = "overlay.set_type"
 
+	// KindCategoryMerge and KindCategoryDelete remap every use of one category to another.
+	KindCategoryMerge  = "category.merge"
+	KindCategoryDelete = "category.delete"
+	SubjectCategory    = "category"
+
 	SubjectTxn = "txn"
 )
 
@@ -87,6 +92,13 @@ type SetType struct {
 	Type  string `json:"type"`
 }
 
+// CategoryRemap says every transaction and split using From now uses To. Both
+// the merge and the delete events carry it; the overlay projection applies it.
+type CategoryRemap struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
 // Register adds the overlay payloads to an event registry.
 func Register(r *events.Registry) {
 	r.Register(KindSetCategory, 1, SetCategory{})
@@ -99,4 +111,6 @@ func Register(r *events.Registry) {
 	r.Register(KindSetFromDiscretionary, 1, SetFromDiscretionary{})
 	r.Register(KindSetReviewed, 1, SetReviewed{})
 	r.Register(KindSetType, 1, SetType{})
+	r.Register(KindCategoryMerge, 1, CategoryRemap{})
+	r.Register(KindCategoryDelete, 1, CategoryRemap{})
 }

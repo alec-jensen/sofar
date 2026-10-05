@@ -168,10 +168,45 @@ func (s *Service) Project(ctx context.Context, tx *sql.Tx, txnID string) error {
 		}
 		st.apply(e, p)
 	}
-	return s.write(ctx, tx, txnID, st)
+	remap, err := s.remaps(ctx, tx)
+	if err != nil {
+		return err
+	}
+	return s.write(ctx, tx, txnID, st, remap)
 }
 
-func (s *Service) write(ctx context.Context, tx *sql.Tx, txnID string, st overlayState) error {
+// remaps loads the category merges and deletes in force, as from -> to.
+func (s *Service) remaps(ctx context.Context, tx *sql.Tx) (map[string]string, error) {
+	evs, err := events.Effective(ctx, tx, events.Filter{SubjectType: SubjectCategory, Kinds: []string{KindCategoryMerge, KindCategoryDelete}})
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]string{}
+	for _, e := range evs {
+		p, err := s.Reg.Decode(e)
+		if err != nil {
+			return nil, err
+		}
+		if r, ok := p.(*CategoryRemap); ok {
+			m[r.From] = r.To
+		}
+	}
+	return m, nil
+}
+
+// resolve follows merge chains (a into b, b into c) to the surviving category.
+func resolve(remap map[string]string, id string) string {
+	for i := 0; i < 20; i++ {
+		next, ok := remap[id]
+		if !ok || next == id {
+			return id
+		}
+		id = next
+	}
+	return id
+}
+
+func (s *Service) write(ctx context.Context, tx *sql.Tx, txnID string, st overlayState, remap map[string]string) error {
 	var accountID, providerID string
 	if err := tx.QueryRowContext(ctx, `SELECT account_id, provider_txn_id FROM raw_transactions WHERE id=$1`, txnID).Scan(&accountID, &providerID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -197,6 +232,10 @@ func (s *Service) write(ctx context.Context, tx *sql.Tx, txnID string, st overla
 		}
 		month = time.Date(ym.Y, ym.M, 1, 0, 0, 0, 0, time.UTC)
 	}
+	if st.category != nil {
+		c := resolve(remap, *st.category)
+		st.category = &c
+	}
 	var typ any
 	if st.typ != "" {
 		typ = st.typ
@@ -212,7 +251,7 @@ func (s *Service) write(ctx context.Context, tx *sql.Tx, txnID string, st overla
 	}
 	for i, p := range st.splits {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO txn_splits (raw_txn_id, part_no, amount, category_id, tags, note) VALUES ($1,$2,$3,$4,$5::text[],$6)`,
-			txnID, i+1, p.Amount, p.CategoryID, store.TextArray(p.Tags), p.Note); err != nil {
+			txnID, i+1, p.Amount, resolve(remap, p.CategoryID), store.TextArray(p.Tags), p.Note); err != nil {
 			return err
 		}
 	}
@@ -252,7 +291,7 @@ func (s *Service) projectSubject(ctx context.Context, tx *sql.Tx, e events.Event
 // RebuildAll drops every overlay row and rebuilds them from the events. It
 // exists to prove the projection is derivable and to repair after a bug fix.
 func (s *Service) RebuildAll(ctx context.Context, tx *sql.Tx) error {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT subject_id FROM events WHERE subject_type=$1`, SubjectTxn)
+	rows, err := tx.QueryContext(ctx, `SELECT subject_id FROM events WHERE subject_type=$1 UNION SELECT raw_txn_id::text FROM transaction_overlays`, SubjectTxn)
 	if err != nil {
 		return err
 	}
