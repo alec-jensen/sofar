@@ -10,3 +10,13 @@ Sofar personal budgeting PWA.zip
 design-reference/
 .env.local
 .env.*.local
+.env.production
+secrets/
+*.key
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/agent-memory-local/
+.sofar-probe/
+*.probe.raw.json
+bin/
+coverage/
