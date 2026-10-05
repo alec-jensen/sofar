@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/alec-jensen/sofar/internal/civil"
@@ -156,10 +157,39 @@ func validSplit(parts []SplitPart, total int64) error {
 // Project rebuilds one transaction's overlay row, splits and hidden tombstone
 // from the effective events. Events are the truth; the overlay is a cache.
 func (s *Service) Project(ctx context.Context, tx *sql.Tx, txnID string) error {
-	evs, err := events.Effective(ctx, tx, events.Filter{SubjectType: SubjectTxn, SubjectID: txnID})
+	evs, err := s.overlayEvents(ctx, tx, txnID)
 	if err != nil {
 		return err
 	}
+	// A bank row that replaced a manual transaction inherits the manual row's overlay.
+	merges, err := events.Effective(ctx, tx, events.Filter{Kinds: []string{KindManualMerge}})
+	if err != nil {
+		return err
+	}
+	mergedAway := false
+	for _, m := range merges {
+		p, err := s.Reg.Decode(m)
+		if err != nil {
+			return err
+		}
+		mm := p.(*ManualMerge)
+		switch txnID {
+		case mm.BankID:
+			inherited, err := s.overlayEvents(ctx, tx, mm.ManualID)
+			if err != nil {
+				return err
+			}
+			evs = append(evs, inherited...)
+		case mm.ManualID:
+			mergedAway = true
+		}
+	}
+	sort.SliceStable(evs, func(i, j int) bool {
+		if !evs[i].At.Equal(evs[j].At) {
+			return evs[i].At.Before(evs[j].At)
+		}
+		return evs[i].ID < evs[j].ID
+	})
 	var st overlayState
 	for _, e := range evs {
 		p, err := s.Reg.Decode(e)
@@ -168,11 +198,20 @@ func (s *Service) Project(ctx context.Context, tx *sql.Tx, txnID string) error {
 		}
 		st.apply(e, p)
 	}
+	if mergedAway {
+		st.touched, st.hidden = true, true
+	}
 	remap, err := s.remaps(ctx, tx)
 	if err != nil {
 		return err
 	}
 	return s.write(ctx, tx, txnID, st, remap)
+}
+
+var overlayKinds = []string{KindSetCategory, KindSetNote, KindSetTags, KindHide, KindUnhide, KindSetMonth, KindSplit, KindSetFromDiscretionary, KindSetReviewed, KindSetType}
+
+func (s *Service) overlayEvents(ctx context.Context, q events.DBTX, txnID string) ([]events.Event, error) {
+	return events.Effective(ctx, q, events.Filter{SubjectType: SubjectTxn, SubjectID: txnID, Kinds: overlayKinds})
 }
 
 // remaps loads the category merges and deletes in force, as from -> to.

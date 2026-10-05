@@ -20,6 +20,11 @@ const (
 	KindCategoryDelete = "category.delete"
 	SubjectCategory    = "category"
 
+	// KindManualMerge says a manual transaction was merged into a synced one: the
+	// bank row keeps the manual row's overlay and the manual row disappears.
+	// The subject is the bank transaction.
+	KindManualMerge = "manual.merge"
+
 	SubjectTxn = "txn"
 )
 
@@ -99,6 +104,12 @@ type CategoryRemap struct {
 	To   string `json:"to"`
 }
 
+// ManualMerge links a manual transaction to the synced transaction that replaces it.
+type ManualMerge struct {
+	ManualID string `json:"manual_id"`
+	BankID   string `json:"bank_id"`
+}
+
 // Register adds the overlay payloads to an event registry.
 func Register(r *events.Registry) {
 	r.Register(KindSetCategory, 1, SetCategory{})
@@ -111,6 +122,7 @@ func Register(r *events.Registry) {
 	r.Register(KindSetFromDiscretionary, 1, SetFromDiscretionary{})
 	r.Register(KindSetReviewed, 1, SetReviewed{})
 	r.Register(KindSetType, 1, SetType{})
+	r.Register(KindManualMerge, 1, ManualMerge{})
 	r.Register(KindCategoryMerge, 1, CategoryRemap{})
 	r.Register(KindCategoryDelete, 1, CategoryRemap{})
 }
