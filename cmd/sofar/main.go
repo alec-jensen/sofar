@@ -13,6 +13,7 @@ import (
 	"sort"
 	"syscall"
 	"time"
+	_ "time/tzdata" // zone data even where the OS has none (scratch containers, Windows)
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
