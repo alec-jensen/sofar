@@ -161,7 +161,7 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	h := api.New(api.Deps{
+	h := api.New(api.WithDomain(api.Deps{
 		Cfg:     cfg,
 		DB:      db,
 		Auth:    auth.New(db, box, cfg.SetupKey),
@@ -181,7 +181,7 @@ func serve(args []string) error {
 			}
 			return nil
 		},
-	})
+	}))
 	srv := &http.Server{Addr: cfg.Bind, Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	go func() {
 		<-ctx.Done()

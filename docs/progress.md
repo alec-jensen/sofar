@@ -30,3 +30,12 @@ Update at the end of every work session. Newest entry first.
 - Spec amendments opened: none.
 - Blockers and questions for the owner: none for M0. Nothing has been pushed.
 - Next: M1 (`money`, `civil`, event store, ledger tables, overlays, CSV/OFX import).
+
+### 2026-10-05: M1 core types, events, ledger, import (Claude Sonnet 5.5)
+- Milestone M1, tasks M1.1 to M1.9 done on `rebuild`.
+- New packages: `money` (exact decimal parsing, per-day floor division), `civil` (S3 month rules, effective-dated zones, A-010 boundary attribution), `events` (append-only store, idempotency keys, undo and redo, versioned payload registry), `ledger` (effective transaction view, event-sourced overlays with a rebuildable projection, splits, hide tombstones, category remap), `categories`, `importer` (CSV, OFX/QFX, QIF with dry run and batch undo), `manual`, `accounts`. Migrations 00004 (ledger schema and seeded default categories) and 00005 (soft delete).
+- API (in `api/openapi.yaml`, contract-checked): accounts, transactions (list, create manual, patch, split, hide, unhide), categories and groups, imports (dry run, apply, undo), generic event undo and redo.
+- Tests: unit and integration for every package, rapid properties for undo/redo (invariant 4), projection rebuild equals incremental, import twice is identical (invariant 11), fuzz tests for all three parsers (the OFX fuzzer found a byte-offset bug, fixed; its corpus entry is kept). Invariant 13 (same inputs, same output) is covered for the projection here and for `ComputeMonth` in M3.
+- Decisions: bank dates are stored as calendar dates plus an optional instant (`*_on`, `*_instant`); category delete and merge are soft and carried by one remap event that the overlay projection applies; an undone import batch hides its rows through the view (never deletes), and re-importing the file revives them; manual merge is a link event, so the bank row inherits the manual overlay and undo is exact. New table `idempotency_keys` (M0).
+- Spec amendments opened: none.
+- Next: M2 (SimpleFIN client, ingest, probe). The probe needs the owner's separate `SIMPLEFIN_ACCESS_URL`; without it M2 builds against fixtures and the demo URL, and M3 can proceed first (see `docs/plan/README.md` section 2).

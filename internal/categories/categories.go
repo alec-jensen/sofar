@@ -349,3 +349,25 @@ func (s *Service) Undo(ctx context.Context, tx *sql.Tx, actor events.Actor, even
 	}
 	return u, s.Ledger.RebuildAll(ctx, tx)
 }
+
+// Redo reverses an undo of a merge or delete: the category is retired again.
+func (s *Service) Redo(ctx context.Context, tx *sql.Tx, actor events.Actor, undoID int64) (events.Event, error) {
+	undo, err := events.Get(ctx, tx, undoID)
+	if err != nil {
+		return events.Event{}, err
+	}
+	r, err := events.Redo(ctx, tx, actor, undoID, "")
+	if err != nil {
+		return r, err
+	}
+	if undo.Reverses != nil {
+		orig, err := events.Get(ctx, tx, *undo.Reverses)
+		if err != nil {
+			return r, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE categories SET deleted_at=now() WHERE id=$1`, orig.SubjectID); err != nil {
+			return r, err
+		}
+	}
+	return r, s.Ledger.RebuildAll(ctx, tx)
+}

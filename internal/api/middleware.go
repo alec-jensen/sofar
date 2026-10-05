@@ -73,7 +73,11 @@ func (s *server) middleware(next http.Handler) http.Handler {
 				return
 			}
 		}
-		r.Body = http.MaxBytesReader(sw, r.Body, 1<<20)
+		limit := int64(1 << 20)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/imports" {
+			limit = maxImportBody // file uploads
+		}
+		r.Body = http.MaxBytesReader(sw, r.Body, limit)
 		next.ServeHTTP(sw, r)
 	})
 }

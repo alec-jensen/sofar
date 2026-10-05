@@ -9,9 +9,14 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/alec-jensen/sofar/internal/accounts"
 	"github.com/alec-jensen/sofar/internal/auth"
+	"github.com/alec-jensen/sofar/internal/categories"
 	"github.com/alec-jensen/sofar/internal/config"
 	"github.com/alec-jensen/sofar/internal/httpx"
+	"github.com/alec-jensen/sofar/internal/importer"
+	"github.com/alec-jensen/sofar/internal/ledger"
+	"github.com/alec-jensen/sofar/internal/manual"
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
 )
@@ -23,7 +28,14 @@ type Deps struct {
 	Auth     *auth.Service
 	Throttle *auth.Throttle
 	Push     *notify.Sender
-	Log      zerolog.Logger
+
+	// Domain services (nil in tests that do not need them).
+	Accounts   *accounts.Service
+	Ledger     *ledger.Service
+	Categories *categories.Service
+	Importer   *importer.Service
+	Manual     *manual.Service
+	Log        zerolog.Logger
 	// Metrics, when set, is served at /metrics to loopback callers and signed-in users.
 	Metrics http.Handler
 	// Ready reports whether the database is reachable and migrations are current.
@@ -69,6 +81,30 @@ func (s *server) routes() {
 	m.Handle("POST /api/v1/push/unsubscribe", s.protect(s.idempotent(s.pushUnsubscribe)))
 	m.Handle("GET /api/v1/push/devices", s.protect(s.pushDevices))
 	m.Handle("POST /api/v1/push/revoke-all", s.protect(s.idempotent(s.pushRevokeAll)))
+
+	// ledger
+	m.Handle("GET /api/v1/accounts", s.protect(s.listAccounts))
+	m.Handle("POST /api/v1/accounts", s.protect(s.idempotent(s.createAccount)))
+	m.Handle("PATCH /api/v1/accounts/{id}", s.protect(s.idempotent(s.patchAccount)))
+	m.Handle("GET /api/v1/transactions", s.protect(s.listTransactions))
+	m.Handle("POST /api/v1/transactions", s.protect(s.idempotent(s.createTransaction)))
+	m.Handle("GET /api/v1/transactions/{id}", s.protect(s.getTransaction))
+	m.Handle("PATCH /api/v1/transactions/{id}", s.protect(s.idempotent(s.patchTransaction)))
+	m.Handle("POST /api/v1/transactions/{id}/split", s.protect(s.idempotent(s.splitTransaction)))
+	m.Handle("POST /api/v1/transactions/{id}/hide", s.protect(s.idempotent(s.hideTransaction(false))))
+	m.Handle("POST /api/v1/transactions/{id}/unhide", s.protect(s.idempotent(s.hideTransaction(true))))
+	m.Handle("GET /api/v1/categories", s.protect(s.listCategories))
+	m.Handle("POST /api/v1/categories", s.protect(s.idempotent(s.createCategory)))
+	m.Handle("PATCH /api/v1/categories/{id}", s.protect(s.idempotent(s.renameCategory)))
+	m.Handle("POST /api/v1/categories/{id}/merge", s.protect(s.idempotent(s.mergeCategory)))
+	m.Handle("DELETE /api/v1/categories/{id}", s.protect(s.idempotent(s.deleteCategory)))
+	m.Handle("POST /api/v1/category-groups", s.protect(s.idempotent(s.createGroup)))
+	m.Handle("POST /api/v1/imports", s.protect(s.createImport))
+	m.Handle("GET /api/v1/imports/{id}", s.protect(s.getImport))
+	m.Handle("POST /api/v1/imports/{id}/apply", s.protect(s.idempotent(s.applyImport)))
+	m.Handle("POST /api/v1/imports/{id}/undo", s.protect(s.idempotent(s.undoImport)))
+	m.Handle("POST /api/v1/events/{id}/undo", s.protect(s.idempotent(s.undoEvent)))
+	m.Handle("POST /api/v1/events/{id}/redo", s.protect(s.idempotent(s.redoEvent)))
 
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Unknown endpoint.")

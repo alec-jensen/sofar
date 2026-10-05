@@ -62,7 +62,7 @@ func newClient(t *testing.T) *client {
 	svc := auth.New(testkit.DB(t), box, "setup-key-of-at-least-24-chars")
 	svc.PasswordCost, svc.CodeCost = 4, 4
 	cfg := config.Config{Origin: origin, StaticDir: "none"}
-	h := New(Deps{Cfg: cfg, DB: svc.DB, Auth: svc, Log: zerolog.Nop()})
+	h := New(WithDomain(Deps{Cfg: cfg, DB: svc.DB, Auth: svc, Log: zerolog.Nop()}))
 	return &client{t: t, h: h}
 }
 
