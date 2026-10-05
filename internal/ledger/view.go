@@ -81,11 +81,13 @@ SELECT r.id, r.account_id, r.provider_txn_id, r.posted_on, r.posted_instant, r.t
 FROM raw_transactions r
 LEFT JOIN transaction_overlays o ON o.raw_txn_id = r.id
 LEFT JOIN categories c ON c.id = o.category_id
-LEFT JOIN category_groups g ON g.id = c.group_id`
+LEFT JOIN category_groups g ON g.id = c.group_id
+LEFT JOIN import_batches ib ON ib.id = r.import_batch_id`
 
 // View returns effective transactions, newest first (posted date, then id).
 func (s *Service) View(ctx context.Context, f Filter) (Page, error) {
-	var where []string
+	// rows of an undone import batch are hidden, never deleted
+	where := []string{"(ib.id IS NULL OR ib.status <> 'undone')"}
 	var args []any
 	arg := func(v any) string {
 		args = append(args, v)
