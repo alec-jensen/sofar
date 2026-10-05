@@ -20,6 +20,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/auth"
 	"github.com/alec-jensen/sofar/internal/config"
 	"github.com/alec-jensen/sofar/internal/crypt"
+	"github.com/alec-jensen/sofar/internal/jobs"
 	"github.com/alec-jensen/sofar/internal/logging"
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
@@ -138,7 +139,11 @@ func serve(args []string) error {
 	defer db.Close()
 
 	if *runWorker {
-		log.Info().Msg("worker: no job handlers registered yet")
+		q := jobs.NewQueue(db, log)
+		sched := jobs.NewScheduler(db, log, cfg.HomeTZ)
+		go q.Run(ctx, 5*time.Second)
+		go sched.Run(ctx, time.Minute)
+		log.Info().Msg("worker started")
 	}
 	if !*runAPI {
 		<-ctx.Done()
