@@ -12,6 +12,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/ledger"
 	"github.com/alec-jensen/sofar/internal/manual"
 	"github.com/alec-jensen/sofar/internal/recompute"
+	"github.com/alec-jensen/sofar/internal/recurring"
 )
 
 func eventID(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -79,6 +80,17 @@ func (s *server) reverse(w http.ResponseWriter, r *http.Request, redo bool) {
 				out, err = s.Manual.Redo(ctx, tx, events.ActorUser, id)
 			} else {
 				out, err = s.Manual.Undo(ctx, tx, events.ActorUser, id)
+			}
+			return
+		}) {
+			return
+		}
+	case recurring.KindCreate, recurring.KindEnd, recurring.KindDismiss:
+		if !s.withTx(w, r, func(ctx context.Context, tx *sql.Tx) (err error) {
+			if redo {
+				out, err = s.Recurring.Redo(ctx, tx, events.ActorUser, id)
+			} else {
+				out, err = s.Recurring.Undo(ctx, tx, events.ActorUser, id)
 			}
 			return
 		}) {

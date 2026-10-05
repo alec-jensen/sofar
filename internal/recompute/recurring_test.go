@@ -347,3 +347,126 @@ func TestA9_Inv8_TransactionCountsInIncomeAtMostOnce(t *testing.T) {
 func fmtDate(m, d int) string {
 	return time.Date(2026, time.Month(m), d, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
 }
+
+func (e *renv) biweeklyPay(amount int64) {
+	e.t.Helper()
+	sched := recurrence.Schedule{Kind: recurrence.KindInterval, IntervalDays: 14, Anchor: dd("2026-01-02"), EffectiveFrom: dd("2026-01-01")}
+	e.tx(func(tx *sql.Tx) {
+		if _, err := e.items.Create(context.Background(), tx, events.ActorUser, recurring.Params{Kind: recurrence.ItemIncome, Name: "ACME PAYROLL", Amount: money.Cents(amount), Schedule: sched, ActiveFrom: dd("2026-01-01")}); err != nil {
+			e.t.Fatal(err)
+		}
+	})
+	for _, d := range []string{"2026-06-05", "2026-06-19", "2026-07-03", "2026-07-17", "2026-07-31", "2026-08-14"} {
+		id := testkit.RawTxn(e.t, e.db, e.acct, testkit.Raw{PostedOn: d, Amount: amount, Description: "ACME PAYROLL"})
+		e.set(id, "salary", true)
+	}
+}
+
+func TestS2_ExampleA_ExtraOccurrenceLabeled(t *testing.T) {
+	e := rsetup(t)
+	e.rec.Now = func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) }
+	e.biweeklyPay(200000)
+	ctx := context.Background()
+	f, err := e.rec.Forecast(ctx, e.db, ym(2026, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.SoFar != 600000 || f.Expected != 600000 || len(f.Extras) != 1 {
+		t.Fatalf("July has three paychecks, labeled: %+v", f)
+	}
+	if june, _ := e.rec.Forecast(ctx, e.db, ym(2026, 6)); len(june.Extras) != 0 {
+		t.Fatalf("an ordinary month has no label: %+v", june)
+	}
+	e.rec.Recompute(ctx)
+	if aug := e.snap(ym(2026, 8)); aug.Plan != 600000 || aug.Pot != 600000-aug.Fixed-aug.SpendBase {
+		t.Fatalf("the three-paycheck month flows to August's pot: %+v", aug)
+	}
+}
+
+func TestS14_NextPlanSoFarForecast(t *testing.T) {
+	e := rsetup(t)
+	e.rec.Now = func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) }
+	e.biweeklyPay(200000)
+	f, _ := e.rec.Forecast(context.Background(), e.db, ym(2026, 8))
+	// August: Aug 14 arrived, Aug 28 expected: so far 2000, expected 4000
+	if f.SoFar != 200000 || f.Expected != 400000 {
+		t.Fatalf("%+v", f)
+	}
+}
+
+func TestS2_DecompositionSuggestsButNeverApplies(t *testing.T) {
+	e := rsetup(t)
+	e.rec.Now = func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) }
+	e.biweeklyPay(200000)
+	lump := testkit.RawTxn(t, e.db, e.acct, testkit.Raw{PostedOn: "2026-07-20", Amount: 50000, Description: "BIG GIFT"})
+	e.set(lump, "one_time_income", true)
+	ctx := context.Background()
+	var before int
+	e.db.QueryRow(`SELECT count(*) FROM events WHERE subject_type='month'`).Scan(&before)
+	sug, err := e.rec.Decompose(ctx, e.db, ym(2026, 8))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]bool{}
+	for _, s := range sug {
+		kinds[s.Kind] = s.Suggest == "one_time"
+	}
+	if !kinds["extra_occurrence"] || !kinds["lump"] {
+		t.Fatalf("an extra paycheck and a lump, both suggested one-time: %+v", sug)
+	}
+	var after int
+	e.db.QueryRow(`SELECT count(*) FROM events WHERE subject_type='month'`).Scan(&after)
+	if after != before {
+		t.Fatal("suggestions never write events")
+	}
+}
+
+func TestS5_MissingBillSignalledPastGrace(t *testing.T) {
+	e := rsetup(t)
+	e.salary(400000, "2026-03")
+	it := e.bill(recurrence.ItemBill, "Landlord", 100000, 1, "2026-03-01")
+	_ = it
+	e.pay("LANDLORD", 100000, "2026-03-01")
+	e.pay("LANDLORD", 100000, "2026-04-01")
+	// May 1 is missing; "today" is May 10, past the 3-day grace
+	sig, err := e.rec.Signals(context.Background(), e.db, dd("2026-05-10"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missing bool
+	for _, s := range sig {
+		if s.Kind == "bill.missing" && s.On == dd("2026-05-01") {
+			missing = true
+		}
+	}
+	if !missing {
+		t.Fatalf("expected bill.missing for May 1: %+v", sig)
+	}
+	if sig, _ = e.rec.Signals(context.Background(), e.db, dd("2026-05-03")); len(sig) != 0 {
+		t.Fatalf("inside the grace window nothing is missing yet: %+v", sig)
+	}
+}
+
+func TestS5_PriceChangeFlaggedAndEndedAsked(t *testing.T) {
+	e := rsetup(t)
+	e.salary(400000, "2026-02")
+	e.bill(recurrence.ItemBill, "Landlord", 100000, 1, "2026-02-01")
+	e.pay("LANDLORD", 100000, "2026-02-01")
+	e.pay("LANDLORD", 130000, "2026-03-01")
+	sig, _ := e.rec.Signals(context.Background(), e.db, dd("2026-03-10"))
+	var price bool
+	for _, s := range sig {
+		price = price || (s.Kind == "bill.price_change" && s.Amount == 130000)
+	}
+	if !price {
+		t.Fatalf("an amount outside tolerance is flagged: %+v", sig)
+	}
+	later, _ := e.rec.Signals(context.Background(), e.db, dd("2026-06-10"))
+	var ended bool
+	for _, s := range later {
+		ended = ended || s.Kind == "bill.ended_check"
+	}
+	if !ended {
+		t.Fatalf("after two intervals with no occurrence it asks whether it is still active: %+v", later)
+	}
+}

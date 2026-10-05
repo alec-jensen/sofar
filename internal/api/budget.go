@@ -48,6 +48,9 @@ type homeDTO struct {
 	DataAsOf        *string `json:"data_as_of"`
 	UnreviewedCount int     `json:"unreviewed_count"`
 	HasData         bool    `json:"has_data"`
+	HeldDeposits    int64   `json:"held_deposits"`
+	PlanSoFar       int64   `json:"plan_so_far"`
+	PlanExpected    int64   `json:"plan_expected"`
 }
 
 // home is the hero: what is safe to spend, computed from the stored snapshot.
@@ -70,6 +73,12 @@ func (s *server) home(w http.ResponseWriter, r *http.Request) {
 		t := asOf.Time.UTC().Format(time.RFC3339)
 		d.DataAsOf = &t
 		d.Stale = s.Recompute.Now().Sub(asOf.Time) > staleAfter
+	}
+	if held, err := s.Recompute.Held(r.Context(), s.DB, ym); err == nil {
+		d.HeldDeposits = int64(held)
+	}
+	if f, err := s.Recompute.Forecast(r.Context(), s.DB, ym); err == nil {
+		d.PlanSoFar, d.PlanExpected = int64(f.SoFar), int64(f.Expected)
 	}
 	page, err := s.Ledger.View(r.Context(), ledger.Filter{Month: &ym})
 	if err != nil {

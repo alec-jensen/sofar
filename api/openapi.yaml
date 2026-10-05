@@ -18,6 +18,7 @@ tags:
   - name: imports
   - name: events
   - name: budget
+  - name: recurring
 
 paths:
   /healthz:
@@ -827,6 +828,162 @@ paths:
         "200": { $ref: "#/components/responses/EventResult" }
         default: { $ref: "#/components/responses/Error" }
 
+  /api/v1/recurring:
+    get:
+      tags: [recurring]
+      summary: recurring items, detected candidates waiting for an answer, and signals
+      operationId: listRecurring
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, candidates, signals]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/RecurringItem" } }
+                  candidates: { type: array, items: { $ref: "#/components/schemas/RecurringCandidate" } }
+                  signals: { type: array, items: { $ref: "#/components/schemas/RecurringSignal" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [recurring]
+      summary: add a recurring item by hand
+      operationId: createRecurring
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecurringInput" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecurringItem" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/recurring/candidates/confirm:
+    post:
+      tags: [recurring]
+      summary: say yes to a detected candidate
+      operationId: confirmCandidate
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [key]
+              properties:
+                key: { type: string }
+                kind: { type: string, enum: [bill, subscription, income, payment_plan] }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecurringItem" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/recurring/candidates/dismiss:
+    post:
+      tags: [recurring]
+      summary: say it is not recurring, so detection will not ask about this merchant again
+      operationId: dismissCandidate
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [key, direction]
+              properties:
+                key: { type: string }
+                direction: { type: string, enum: ["in", "out"] }
+      responses:
+        "200": { $ref: "#/components/responses/EventResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/recurring/{id}/end:
+    post:
+      tags: [recurring]
+      summary: stop an item (a cancelled bill frees its reserve into uncategorized)
+      operationId: endRecurring
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                on: { type: string, format: date }
+      responses:
+        "200": { $ref: "#/components/responses/EventResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/transactions/{id}/recurring:
+    post:
+      tags: [recurring]
+      summary: mark a transaction as recurring (bypasses the detection threshold)
+      operationId: markRecurring
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecurringInput" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecurringItem" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/months/{ym}/forecast:
+    get:
+      tags: [budget]
+      summary: the plan so far and expected by schedule, with suggestions for the pot (never applied)
+      operationId: forecastMonth
+      security: [{ session: [] }]
+      parameters:
+        - { name: ym, in: path, required: true, schema: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [month, source_month, plan_so_far, plan_expected, extras, suggestions]
+                properties:
+                  month: { type: string }
+                  source_month: { type: string }
+                  plan_so_far: { type: integer, format: int64 }
+                  plan_expected: { type: integer, format: int64 }
+                  extras: { type: array, items: { type: string } }
+                  suggestions:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [stream, kind, amount, suggest, label]
+                      properties:
+                        stream: { type: string }
+                        kind: { type: string, enum: [extra_occurrence, amount_increase, lump] }
+                        amount: { type: integer, format: int64 }
+                        suggest: { type: string, enum: [one_time, permanent] }
+                        label: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     session:
@@ -1049,7 +1206,7 @@ components:
     Home:
       type: object
       additionalProperties: false
-      required: [month, spend_left, per_day, last_day_extra, learning, partial, overcommitted, uncategorized, stale, data_as_of, unreviewed_count, has_data]
+      required: [month, spend_left, per_day, last_day_extra, learning, partial, overcommitted, uncategorized, stale, data_as_of, unreviewed_count, has_data, held_deposits, plan_so_far, plan_expected]
       properties:
         month: { type: string }
         spend_left: { type: integer, format: int64, description: "cents; negative when overspent" }
@@ -1063,6 +1220,9 @@ components:
         data_as_of: { type: string, format: date-time, nullable: true }
         unreviewed_count: { type: integer }
         has_data: { type: boolean }
+        held_deposits: { type: integer, format: int64, description: "unreviewed deposits kept out of next month's plan" }
+        plan_so_far: { type: integer, format: int64 }
+        plan_expected: { type: integer, format: int64 }
     Explain:
       type: object
       additionalProperties: false
@@ -1116,6 +1276,71 @@ components:
         summary:
           type: object
           additionalProperties: { type: integer, format: int64 }
+    RecurringSchedule:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [monthly, semi_monthly, nth_weekday, last_business_day, interval_days] }
+        day: { type: integer }
+        days: { type: array, items: { type: integer } }
+        nth: { type: integer }
+        weekday: { type: integer, minimum: 0, maximum: 6 }
+        every_months: { type: integer }
+        interval_days: { type: integer }
+        anchor: { type: string, format: date }
+    RecurringInput:
+      type: object
+      additionalProperties: false
+      required: [schedule]
+      properties:
+        kind: { type: string, enum: [bill, subscription, income, payment_plan] }
+        name: { type: string }
+        amount: { type: integer, format: int64 }
+        variable: { type: boolean }
+        category_id: { type: string }
+        schedule: { $ref: "#/components/schemas/RecurringSchedule" }
+        installments_total: { type: integer }
+    RecurringItem:
+      type: object
+      additionalProperties: false
+      required: [id, kind, name, category_id, amount, variable, active_from, ended_on, next_date, installments_total]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [bill, subscription, income, payment_plan] }
+        name: { type: string }
+        category_id: { type: string, nullable: true }
+        amount: { type: integer, format: int64 }
+        variable: { type: boolean }
+        active_from: { type: string, format: date }
+        ended_on: { type: string, format: date, nullable: true }
+        next_date: { type: string, format: date, nullable: true }
+        installments_total: { type: integer }
+    RecurringCandidate:
+      type: object
+      additionalProperties: false
+      required: [key, name, kind, category_id, amount, variable, occurrences, last_date, next_date, after_one]
+      properties:
+        key: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        category_id: { type: string, nullable: true }
+        amount: { type: integer, format: int64 }
+        variable: { type: boolean }
+        occurrences: { type: integer }
+        last_date: { type: string }
+        next_date: { type: string }
+        after_one: { type: boolean }
+    RecurringSignal:
+      type: object
+      additionalProperties: false
+      required: [item_id, name, kind, on, amount]
+      properties:
+        item_id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [bill.missing, bill.ended_check, bill.price_change] }
+        on: { type: string, format: date, nullable: true }
+        amount: { type: integer, format: int64 }
     Page:
       type: object
       description: cursor pagination envelope used by list endpoints

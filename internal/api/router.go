@@ -21,6 +21,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
 	"github.com/alec-jensen/sofar/internal/recompute"
+	"github.com/alec-jensen/sofar/internal/recurring"
 )
 
 // Deps is everything the HTTP layer needs.
@@ -38,6 +39,7 @@ type Deps struct {
 	Importer   *importer.Service
 	Manual     *manual.Service
 	Recompute  *recompute.Service
+	Recurring  *recurring.Service
 	Events     *events.Registry
 	Log        zerolog.Logger
 	// Metrics, when set, is served at /metrics to loopback callers and signed-in users.
@@ -113,6 +115,14 @@ func (s *server) routes() {
 	m.Handle("GET /api/v1/home", s.protect(s.home))
 	m.Handle("GET /api/v1/months/{ym}/explain", s.protect(s.explain))
 	m.Handle("POST /api/v1/months/{ym}/plan-override", s.protect(s.idempotent(s.planOverride)))
+
+	m.Handle("GET /api/v1/recurring", s.protect(s.listRecurring))
+	m.Handle("POST /api/v1/recurring", s.protect(s.idempotent(s.createRecurring)))
+	m.Handle("POST /api/v1/recurring/candidates/confirm", s.protect(s.idempotent(s.confirmCandidate)))
+	m.Handle("POST /api/v1/recurring/candidates/dismiss", s.protect(s.idempotent(s.dismissCandidate)))
+	m.Handle("POST /api/v1/recurring/{id}/end", s.protect(s.idempotent(s.endRecurring)))
+	m.Handle("POST /api/v1/transactions/{id}/recurring", s.protect(s.idempotent(s.markRecurring)))
+	m.Handle("GET /api/v1/months/{ym}/forecast", s.protect(s.forecast))
 
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Unknown endpoint.")
