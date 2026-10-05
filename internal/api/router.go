@@ -11,6 +11,7 @@ import (
 
 	"github.com/alec-jensen/sofar/internal/accounts"
 	"github.com/alec-jensen/sofar/internal/auth"
+	"github.com/alec-jensen/sofar/internal/budgetcfg"
 	"github.com/alec-jensen/sofar/internal/categories"
 	"github.com/alec-jensen/sofar/internal/config"
 	"github.com/alec-jensen/sofar/internal/events"
@@ -40,6 +41,7 @@ type Deps struct {
 	Manual     *manual.Service
 	Recompute  *recompute.Service
 	Recurring  *recurring.Service
+	Budget     *budgetcfg.Service
 	Events     *events.Registry
 	Log        zerolog.Logger
 	// Metrics, when set, is served at /metrics to loopback callers and signed-in users.
@@ -123,6 +125,26 @@ func (s *server) routes() {
 	m.Handle("POST /api/v1/recurring/{id}/end", s.protect(s.idempotent(s.endRecurring)))
 	m.Handle("POST /api/v1/transactions/{id}/recurring", s.protect(s.idempotent(s.markRecurring)))
 	m.Handle("GET /api/v1/months/{ym}/forecast", s.protect(s.forecast))
+
+	m.Handle("GET /api/v1/settings/savings", s.protect(s.getSavings))
+	m.Handle("PUT /api/v1/settings/savings", s.protect(s.idempotent(s.putSavings)))
+	m.Handle("GET /api/v1/settings/ef", s.protect(s.getEF))
+	m.Handle("PUT /api/v1/settings/ef", s.protect(s.idempotent(s.putEF)))
+	m.Handle("GET /api/v1/goals", s.protect(s.listGoals))
+	m.Handle("POST /api/v1/goals", s.protect(s.idempotent(s.createGoal)))
+	m.Handle("PATCH /api/v1/goals/{id}", s.protect(s.idempotent(s.patchGoal)))
+	m.Handle("POST /api/v1/goals/{id}/complete", s.protect(s.idempotent(s.finishGoal(false))))
+	m.Handle("POST /api/v1/goals/{id}/abandon", s.protect(s.idempotent(s.finishGoal(true))))
+	m.Handle("GET /api/v1/months/{ym}/pot", s.protect(s.pot))
+	m.Handle("POST /api/v1/months/{ym}/allocations", s.protect(s.idempotent(s.allocate)))
+	m.Handle("POST /api/v1/months/{ym}/allocations/{event}/make-permanent", s.protect(s.idempotent(s.makePermanent)))
+	m.Handle("POST /api/v1/months/{ym}/standing/{event}/remove", s.protect(s.idempotent(s.removeStanding)))
+	m.Handle("POST /api/v1/months/{ym}/spend-base", s.protect(s.idempotent(s.editSpendBase)))
+	m.Handle("POST /api/v1/months/{ym}/spend-base/unpin", s.protect(s.idempotent(s.unpinSpendBase)))
+	m.Handle("POST /api/v1/months/{ym}/moved-it", s.protect(s.idempotent(s.movedIt)))
+	m.Handle("GET /api/v1/overspends", s.protect(s.listOverspends))
+	m.Handle("POST /api/v1/overspends/{ym}/covers", s.protect(s.idempotent(s.cover)))
+	m.Handle("POST /api/v1/uncovered/settle", s.protect(s.idempotent(s.settle)))
 
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Unknown endpoint.")

@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/alec-jensen/sofar/internal/accounts"
+	"github.com/alec-jensen/sofar/internal/budgetcfg"
 	"github.com/alec-jensen/sofar/internal/categories"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/importer"
@@ -23,6 +24,8 @@ func WithDomain(d Deps) Deps {
 	d.Recompute = recompute.New(d.DB, reg, d.Ledger, d.Cfg.HomeTZ)
 	d.Recurring = recurring.New(d.DB, reg, d.Ledger, d.Cfg.HomeTZ)
 	d.Recurring.Now = d.Recompute.Now
+	d.Budget = budgetcfg.New(d.DB, reg, d.Categories, d.Cfg.HomeTZ)
+	d.Budget.Now = d.Recompute.Now
 	d.Events = reg
 	return d
 }

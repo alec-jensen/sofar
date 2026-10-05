@@ -19,6 +19,7 @@ tags:
   - name: events
   - name: budget
   - name: recurring
+  - name: money
 
 paths:
   /healthz:
@@ -984,6 +985,375 @@ paths:
                         label: { type: string }
         default: { $ref: "#/components/responses/Error" }
 
+  /api/v1/settings/savings:
+    get:
+      tags: [money]
+      summary: the general savings rule in force
+      operationId: getSavings
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Savings" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      tags: [money]
+      summary: set the savings rule from a month onward (fixed cents or basis points of the plan)
+      operationId: putSavings
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Savings" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [version_id]
+                properties:
+                  version_id: { type: integer, format: int64 }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/ef:
+    get:
+      tags: [money]
+      summary: the emergency fund settings, target and balance
+      operationId: getEF
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [months, target_override, line, target, balance]
+                properties:
+                  months: { type: integer }
+                  target_override: { type: integer, format: int64, nullable: true }
+                  line: { type: integer, format: int64 }
+                  target: { type: integer, format: int64 }
+                  balance: { type: integer, format: int64 }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      tags: [money]
+      summary: set the emergency fund from this month (a target change is not a withdrawal)
+      operationId: putEF
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [months, line]
+              properties:
+                months: { type: integer, minimum: 1, maximum: 24 }
+                target_override: { type: integer, format: int64, nullable: true }
+                line: { type: integer, format: int64 }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/goals:
+    get:
+      tags: [money]
+      summary: goals with balances and derived dates
+      operationId: listGoals
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Goal" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [money]
+      summary: create a goal with a monthly amount or a date (the other is derived)
+      operationId: createGoal
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, target]
+              properties:
+                name: { type: string }
+                target: { type: integer, format: int64 }
+                monthly: { type: integer, format: int64 }
+                target_date: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" }
+                priority: { type: integer }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Goal" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/goals/{id}:
+    patch:
+      tags: [money]
+      summary: edit from this month onward (target, monthly, date, paused)
+      operationId: patchGoal
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                target: { type: integer, format: int64 }
+                monthly: { type: integer, format: int64 }
+                target_date: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" }
+                paused: { type: boolean }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Goal" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/goals/{id}/complete:
+    post:
+      tags: [money]
+      summary: the goal is done; its contribution stops and frees into uncategorized
+      operationId: completeGoal
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/goals/{id}/abandon:
+    post:
+      tags: [money]
+      summary: abandon the goal; move its balance with a separate action
+      operationId: abandonGoal
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/months/{ym}/pot:
+    get:
+      tags: [money]
+      summary: the uncategorized money and suggestions for it (never applied automatically)
+      operationId: getPot
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Month" }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pot" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/months/{ym}/allocations:
+    post:
+      tags: [money]
+      summary: allocate the pot, one-time or permanent; over-allocating is allowed and shown
+      operationId: allocatePot
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Month" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [dest, amount]
+                    properties:
+                      dest: { type: string, description: "spending, savings, ef, discretionary or goal:<id>" }
+                      amount: { type: integer, format: int64, minimum: 1 }
+                      permanent: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/EventIds" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/months/{ym}/allocations/{event}/make-permanent:
+    post:
+      tags: [money]
+      summary: turn a past one-time allocation into a standing line
+      operationId: makePermanent
+      security: [{ session: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/Month" }
+        - { name: event, in: path, required: true, schema: { type: integer } }
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200": { $ref: "#/components/responses/EventResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/months/{ym}/standing/{event}/remove:
+    post:
+      tags: [money]
+      summary: remove a standing line (the event id of the allocation that created it)
+      operationId: removeStanding
+      security: [{ session: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/Month" }
+        - { name: event, in: path, required: true, schema: { type: string } }
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200": { $ref: "#/components/responses/EventResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/months/{ym}/spend-base:
+    post:
+      tags: [money]
+      summary: edit spending money by hand; it is pinned and never auto-reversed
+      operationId: editSpendBase
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Month" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [amount]
+              properties:
+                amount: { type: integer, format: int64, minimum: 0 }
+      responses:
+        "200": { $ref: "#/components/responses/EventResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/months/{ym}/spend-base/unpin:
+    post:
+      tags: [money]
+      summary: remove the spend_base pin
+      operationId: unpinSpendBase
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Month" }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200": { $ref: "#/components/responses/EventResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/months/{ym}/moved-it:
+    post:
+      tags: [money]
+      summary: confirm planned savings by hand (i moved it)
+      operationId: movedIt
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Month" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [amount]
+              properties:
+                amount: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200": { $ref: "#/components/responses/EventResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/overspends:
+    get:
+      tags: [money]
+      summary: months with overspending; prompts only for the current and previous month
+      operationId: listOverspends
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [month, gross, covers, open, prompt, passive]
+                      properties:
+                        month: { type: string }
+                        gross: { type: integer, format: int64 }
+                        covers: { type: integer, format: int64 }
+                        open: { type: integer, format: int64 }
+                        prompt: { type: boolean }
+                        passive: { type: boolean }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/overspends/{ym}/covers:
+    post:
+      tags: [money]
+      summary: cover an overspend from next month, savings, a goal, the ef, the bills reserve, or leave it uncovered
+      operationId: coverOverspend
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Month" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [covers]
+              properties:
+                covers:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [source, amount]
+                    properties:
+                      source: { type: string }
+                      amount: { type: integer, format: int64, minimum: 1 }
+                rebuild_months: { type: integer, minimum: 0 }
+      responses:
+        "200": { $ref: "#/components/responses/EventIds" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/uncovered/settle:
+    post:
+      tags: [money]
+      summary: pay down uncovered overspending from savings, a goal or the ef
+      operationId: settleUncovered
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source, amount]
+              properties:
+                source: { type: string }
+                amount: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200": { $ref: "#/components/responses/EventResult" }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     session:
@@ -991,6 +1361,11 @@ components:
       in: cookie
       name: sofar_session
   parameters:
+    Month:
+      name: ym
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" }
     Id:
       name: id
       in: path
@@ -1028,6 +1403,16 @@ components:
             required: [event_id]
             properties:
               event_id: { type: integer, format: int64 }
+    EventIds:
+      description: ok; the ids of the events written, each undoable
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [event_ids]
+            properties:
+              event_ids: { type: array, items: { type: integer, format: int64 } }
     TransactionChange:
       description: the updated transaction and the events that changed it (undo them by id)
       content:
@@ -1341,6 +1726,60 @@ components:
         kind: { type: string, enum: [bill.missing, bill.ended_check, bill.price_change] }
         on: { type: string, format: date, nullable: true }
         amount: { type: integer, format: int64 }
+    Savings:
+      type: object
+      additionalProperties: false
+      required: [fixed, basis_points, use_basis_points]
+      properties:
+        fixed: { type: integer, format: int64, minimum: 0 }
+        basis_points: { type: integer, format: int64, minimum: 0, maximum: 10000 }
+        use_basis_points: { type: boolean }
+        from: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" }
+    Goal:
+      type: object
+      additionalProperties: false
+      required: [id, name, category_id, target, monthly, target_date, derived_date, balance, paused, done, borrowed, priority]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category_id: { type: string }
+        target: { type: integer, format: int64 }
+        monthly: { type: integer, format: int64 }
+        target_date: { type: string, nullable: true }
+        derived_date: { type: string, nullable: true }
+        balance: { type: integer, format: int64 }
+        paused: { type: boolean }
+        done: { type: boolean }
+        borrowed: { type: boolean }
+        priority: { type: integer }
+    Pot:
+      type: object
+      additionalProperties: false
+      required: [month, uncategorized, allocated, unallocated, suggestions]
+      properties:
+        month: { type: string }
+        uncategorized: { type: integer, format: int64 }
+        allocated: { type: integer, format: int64 }
+        unallocated: { type: integer, format: int64 }
+        suggestions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind, label, amount]
+            properties:
+              kind: { type: string, enum: [make_permanent, restore] }
+              label: { type: string }
+              amount: { type: integer, format: int64 }
+              split:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [dest, amount]
+                  properties:
+                    dest: { type: string }
+                    amount: { type: integer, format: int64 }
     Page:
       type: object
       description: cursor pagination envelope used by list endpoints

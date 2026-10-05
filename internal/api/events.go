@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/alec-jensen/sofar/internal/budgetcfg"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/httpx"
 	"github.com/alec-jensen/sofar/internal/importer"
@@ -80,6 +81,17 @@ func (s *server) reverse(w http.ResponseWriter, r *http.Request, redo bool) {
 				out, err = s.Manual.Redo(ctx, tx, events.ActorUser, id)
 			} else {
 				out, err = s.Manual.Undo(ctx, tx, events.ActorUser, id)
+			}
+			return
+		}) {
+			return
+		}
+	case budgetcfg.KindConfigSet:
+		if !s.withTx(w, r, func(ctx context.Context, tx *sql.Tx) (err error) {
+			if redo {
+				out, err = s.Budget.RedoVersion(ctx, tx, events.ActorUser, id)
+			} else {
+				out, err = s.Budget.UndoVersion(ctx, tx, events.ActorUser, id)
 			}
 			return
 		}) {
