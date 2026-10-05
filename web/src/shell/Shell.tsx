@@ -8,6 +8,7 @@ import "../features.css";
 import "./shell.css";
 import { api, type AuthStatus } from "./api";
 import { AuthForm } from "./Auth";
+import Hero from "./Hero";
 import { NewRecoveryCodes, PasswordForm, RecoveryCodes, TOTPDisable, TOTPFlow } from "./Security";
 
 type Panel = null | "totp" | "totp-off" | "new-codes" | "password" | { codes: string[] };
@@ -89,11 +90,7 @@ export default function Shell() {
         </button>
       </header>
 
-      <section className="card shell-card">
-        <span className="eyebrow">rebuilding</span>
-        <h1>your numbers will appear here</h1>
-        <p>sofar is being rebuilt from the ground up. you are signed in and your account is safe.</p>
-      </section>
+      <Hero />
 
       <section className="card shell-card" aria-label="security">
         <h2>security</h2>
