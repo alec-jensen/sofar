@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/alec-jensen/sofar/internal/budget"
+	"github.com/alec-jensen/sofar/internal/budgetcfg"
 	"github.com/alec-jensen/sofar/internal/civil"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/ledger"
@@ -21,6 +22,16 @@ import (
 // created by a permanent allocation (Ref is that allocation's event id).
 const KindStandingRemoved = "standing_removed"
 
+// Budget event kinds handled outside the engine.
+const (
+	// KindStandingAdded turns a one-time allocation into a standing line from its month.
+	KindStandingAdded = "standing_added"
+	// KindRebuildLine spreads an EF withdrawal (Amount) over Months months from the next month.
+	KindRebuildLine = "rebuild_line"
+	// KindRebuildRemoved deletes a rebuild line (Ref is its event id).
+	KindRebuildRemoved = "rebuild_removed"
+)
+
 // data is everything a recompute run reads once: all visible transactions,
 // recurring items and the budget events of every month.
 type data struct {
@@ -28,6 +39,8 @@ type data struct {
 	txns   []ledger.Txn // oldest first
 	items  []recurring.Item
 	links  map[string]map[string]bool
+	cfg    []budgetcfg.Version
+	goals  []budgetcfg.Goal
 	events map[civil.YearMonth][]eventRow
 }
 
@@ -62,6 +75,12 @@ func (s *Service) load(ctx context.Context, q events.DBTX) (*data, error) {
 		return nil, err
 	}
 	if d.links, err = recurring.Links(ctx, q); err != nil {
+		return nil, err
+	}
+	if d.cfg, err = budgetcfg.Versions(ctx, q); err != nil {
+		return nil, err
+	}
+	if d.goals, err = budgetcfg.ListGoals(ctx, q); err != nil {
 		return nil, err
 	}
 	evs, err := events.Effective(ctx, q, events.Filter{SubjectType: SubjectMonth, Kinds: []string{KindBudgetEvent}})
@@ -119,6 +138,23 @@ func (s *Service) assemble(ctx context.Context, q events.DBTX, d *data, ym civil
 	}
 	in.Lines = s.lines(d, ym)
 	in.Lines.Standing = standing(d, ym)
+	in.Lines.Savings = budgetcfg.SavingsAt(d.cfg, ym)
+	ef := budgetcfg.EFAt(d.cfg, ym)
+	in.Lines.EF = budget.Line{ID: "ef", Label: "emergency fund", Amount: ef.Line}
+	in.EFMonths, in.EFTargetOverride = ef.Months, ef.TargetOverride
+	for _, g := range d.goals {
+		if line, ok := g.Line(ym); ok {
+			in.Lines.Goals = append(in.Lines.Goals, line)
+		}
+	}
+	in.Lines.Rebuild = rebuildLines(d, ym)
+	for i := 1; i <= 3; i++ {
+		for _, o := range s.classify(d, ym.AddMonths(-i)).outflows {
+			if o.Bucket == budget.BucketSpending || o.Bucket == budget.BucketBills || o.Bucket == budget.BucketSubscriptions {
+				in.TrailingOutflow[i-1] += o.Amount
+			}
+		}
+	}
 
 	evs, err := events.Effective(ctx, q, events.Filter{SubjectType: SubjectMonth, SubjectID: ym.String(), Kinds: []string{KindPlanOverride}})
 	if err != nil {
@@ -134,7 +170,7 @@ func (s *Service) assemble(ctx context.Context, q events.DBTX, d *data, ym civil
 	}
 	for _, r := range d.events[ym] {
 		switch r.payload.Kind {
-		case KindStandingRemoved:
+		case KindStandingRemoved, KindStandingAdded, KindRebuildLine, KindRebuildRemoved:
 		default:
 			in.Events = append(in.Events, budget.Event{ID: r.ev.ID, At: r.ev.At, Kind: budget.EventKind(r.payload.Kind), Amount: money.Cents(r.payload.Amount),
 				Dest: budget.EnvelopeID(r.payload.Dest), Source: budget.EnvelopeID(r.payload.Source), Permanent: r.payload.Permanent, Ref: r.payload.Ref})
@@ -163,15 +199,49 @@ func standing(d *data, ym civil.YearMonth) []budget.StandingLine {
 	}
 	var out []budget.StandingLine
 	for m, rows := range d.events {
-		if !m.Before(ym) {
-			continue
-		}
 		for _, r := range rows {
 			id := strconv.FormatInt(r.ev.ID, 10)
+			if r.payload.Kind == KindStandingAdded && !m.After(ym) && r.payload.Amount > 0 && !removed[id] {
+				out = append(out, budget.StandingLine{ID: "standing:" + id, Label: "standing line", Amount: money.Cents(r.payload.Amount), Dest: budget.EnvelopeID(r.payload.Dest), Since: m})
+				continue
+			}
+			if !m.Before(ym) {
+				continue
+			}
 			if r.payload.Kind != string(budget.EvAllocation) || !r.payload.Permanent || r.payload.Amount <= 0 || budget.EnvelopeID(r.payload.Dest) == budget.EnvSpendPool || removed[id] {
 				continue
 			}
 			out = append(out, budget.StandingLine{ID: "standing:" + id, Label: "standing line", Amount: money.Cents(r.payload.Amount), Dest: budget.EnvelopeID(r.payload.Dest), Since: m})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// rebuildLines spreads each EF withdrawal over its months, starting the month
+// after the withdrawal, until the user removes it (S8).
+func rebuildLines(d *data, ym civil.YearMonth) []budget.Line {
+	removed := map[string]bool{}
+	for _, rows := range d.events {
+		for _, r := range rows {
+			if r.payload.Kind == KindRebuildRemoved {
+				removed[r.payload.Ref] = true
+			}
+		}
+	}
+	var out []budget.Line
+	for m, rows := range d.events {
+		for _, r := range rows {
+			id := strconv.FormatInt(r.ev.ID, 10)
+			if r.payload.Kind != KindRebuildLine || r.payload.Months < 1 || removed[id] {
+				continue
+			}
+			first := m.Next()
+			if ym.Before(first) || !ym.Before(first.AddMonths(r.payload.Months)) {
+				continue
+			}
+			per := (money.Cents(r.payload.Amount) + money.Cents(r.payload.Months) - 1) / money.Cents(r.payload.Months)
+			out = append(out, budget.Line{ID: "rebuild:" + id, Label: "rebuilding the emergency fund", Amount: per})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -228,6 +298,14 @@ func (s *Service) classify(d *data, ym civil.YearMonth) classified {
 			continue
 		}
 		reviewed := t.ReviewedAt != nil
+		if t.Amount > 0 && t.Bucket == "savings" && kind == "tracked" {
+			// a deposit into a savings account verifies planned savings (S7)
+			if t.Month == ym {
+				seq++
+				out.outflows = append(out.outflows, budget.Outflow{ID: t.ID, Seq: seq, Date: t.PostedOn, Bucket: budget.BucketSavings, Amount: t.Amount})
+			}
+			continue
+		}
 		if t.Amount > 0 || t.Bucket == "income" {
 			month, counts, provisional := s.depositMonth(d, t, reviewed)
 			if month != ym {
@@ -329,6 +407,8 @@ func (s *Service) outflow(out *classified, seq int64, t ledger.Txn, kind, bucket
 	}
 	o := budget.Outflow{ID: id, Seq: seq, Date: t.PostedOn, Amount: -amount, FromDiscretionary: t.FromDiscretionary, Unreviewed: t.ReviewedAt == nil}
 	switch {
+	case strings.HasPrefix(t.Type, "goal:"):
+		o.Bucket, o.GoalID = budget.BucketGoalPurchase, strings.TrimPrefix(t.Type, "goal:")
 	case item != nil && item.Kind != recurrence.ItemIncome:
 		o.Bucket, o.LineID = budget.BucketBills, item.ID
 		if item.Kind == recurrence.ItemSubscription {

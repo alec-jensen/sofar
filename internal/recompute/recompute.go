@@ -35,6 +35,7 @@ type BudgetEvent struct {
 	Source    string `json:"source,omitempty"`
 	Permanent bool   `json:"permanent,omitempty"`
 	Ref       string `json:"ref,omitempty"`
+	Months    int    `json:"months,omitempty"` // rebuild_line: spread over this many months
 }
 
 // PlanOverride sets the effective plan for a month, with a note (S4).

@@ -138,6 +138,9 @@ func (ym YearMonth) Compare(o YearMonth) int {
 // Before reports whether ym is earlier than o.
 func (ym YearMonth) Before(o YearMonth) bool { return ym.Compare(o) < 0 }
 
+// After reports whether ym is later than o.
+func (ym YearMonth) After(o YearMonth) bool { return ym.Compare(o) > 0 }
+
 // Contains reports whether d falls in the month.
 func (ym YearMonth) Contains(d Date) bool { return d.Y == ym.Y && d.M == ym.M }
 
