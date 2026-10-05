@@ -1,12 +1,12 @@
 FROM node:24-alpine AS web
-WORKDIR /src
-COPY package*.json ./
+WORKDIR /src/web
+COPY web/package*.json ./
 RUN npm ci
-COPY index.html tsconfig.json vite.config.ts ./
-COPY src ./src
+COPY web/index.html web/tsconfig.json web/vite.config.ts ./
+COPY web/src ./src
+COPY web/public ./public
 # the app and the server share one merchant directory
-COPY internal/budget/merchants.json ./internal/budget/merchants.json
-COPY public ./public
+COPY internal/budget/merchants.json /src/internal/budget/merchants.json
 RUN npm run build
 
 FROM golang:1.26-alpine AS api
@@ -21,7 +21,7 @@ FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 sofar
 WORKDIR /app
 COPY --from=api /sofar /app/sofar
-COPY --from=web /src/dist /app/dist
+COPY --from=web /src/web/dist /app/dist
 USER sofar
 ENV SOFAR_ADDR=0.0.0.0:8080
 EXPOSE 8080
