@@ -873,7 +873,7 @@ export default function App() {
           <strong>{t.merchant}</strong>
           <span>
             {s!.accounts.find((a) => a.id === t.accountId)?.name || "Account"}{" "}
-            · {t.bankPending ? "processing at the bank" : t.status === "pending" ? "needs review" : t.ignored ? "ignored" : t.splits ? "split" : t.direction === "in" && !link ? "money in" : t.category ? s!.categories[t.category] : "income"}{" "}
+            · {t.bankPending ? "processing at the bank" : t.status === "pending" ? "needs review" : t.ignored ? "ignored" : t.splits ? "split" : t.direction === "in" && !link ? "money in" : t.category ? subName(t.subcategoryId) || s!.categories[t.category] : "income"}{" "}
             <span className="mobile-date">· {dateLabel(t.date)}</span>
           </span>
         </div>

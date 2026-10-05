@@ -152,7 +152,7 @@ main { max-width: none; padding: 42px 36px 34px; }
 .review-drag-cue-change { right: 14px; }
 .review-card-stage > .review-card { position: relative; z-index: 1; touch-action: pan-y; user-select: none; transition: transform var(--d-fast) var(--sp-fast), opacity var(--d-fx) var(--sp-fx), box-shadow var(--d-fx) var(--sp-fx); }
 .review-card-stage > .review-card[data-phase="drag"] { transform: translateX(var(--swipe-x)) rotate(var(--swipe-rotation)) scale(1.03); box-shadow: 0 4px 8px #24332b0f, 0 28px 56px #24332b29; transition: none; cursor: grabbing; }
-.review-card-stage > .review-card[data-phase="exit"] { transform: translateX(520px) rotate(12deg); opacity: 0; transition: transform var(--d-def) var(--sp-fx), opacity var(--d-def) var(--sp-fx); }
+.review-card-stage > .review-card[data-phase="exit"] { transform: translateX(520px) rotate(12deg); opacity: 0; transition: transform var(--swipe-exit-ms, var(--d-def)) cubic-bezier(.3,.7,.4,1), opacity var(--swipe-exit-ms, var(--d-def)) var(--sp-fx); }
 .review-card-stage > .review-card[data-phase="enter"] { transform: translateY(52px) scale(.86); opacity: 0; transition: none; }
 .review-kind { color: #5a6a61; font-size: 14px; }
 .review-card > .merchant-icon { display: none; }

@@ -158,3 +158,46 @@
 .subs-toolbar .history-chips button { flex: none; }
 .subs-summary > div { min-width: 0; }
 .subs-summary strong { font-size: clamp(22px, 6.5vw, 28px); overflow-wrap: anywhere; }
+
+/* Phone layout for the home month section and its recent list */
+@media (max-width: 700px) {
+  .reference-home > .home-month { order: 9; margin-top: 26px; }
+  .reference-home-note { order: 10; }
+  .home-month-groups { grid-template-columns: 1fr; }
+  .home-month-recent .transaction-row { display: flex; align-items: center; gap: 12px; min-height: 62px; padding: 10px 14px; }
+  .home-month-recent .transaction-name { flex: 1; min-width: 0; }
+  .home-month-recent .transaction-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .home-month-recent .transaction-name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .home-month-recent .tx-date, .home-month-recent .pill, .home-month-recent .tx-more { display: none; }
+  .home-month-recent .tx-amount { flex: none; }
+}
+
+/* Thumb-sized tap targets on touch screens */
+@media (pointer: coarse), (max-width: 700px) {
+  .month-picker button { min-width: 40px; min-height: 40px; display: inline-grid; place-items: center; }
+  .text-button, .home-month-head .text-button { min-height: 40px; padding-block: 8px; }
+  .deposit-remove { width: 40px; height: 40px; }
+  .design-setup-heading > button, .design-buy-breadcrumb > button { min-height: 40px; padding-inline: 10px; }
+  .design-rule-switch { min-height: 40px; }
+  .subs-row { min-height: 56px; }
+  .account-disconnect { min-height: 40px; }
+}
+
+/* On phones the bottom of the screen belongs to the action buttons and tab bar, so notices drop in from the top. */
+@media (max-width: 700px) {
+  .toast {
+    top: max(12px, env(safe-area-inset-top));
+    bottom: auto;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100% - 32px);
+    max-width: 420px;
+    font-size: 13px;
+    padding: 12px 14px;
+    animation: toast-drop 0.22s ease-out;
+  }
+}
+@keyframes toast-drop {
+  from { opacity: 0; transform: translate(-50%, -14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}

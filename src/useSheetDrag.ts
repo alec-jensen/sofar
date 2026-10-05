@@ -33,12 +33,13 @@ export function useSheetDrag(open: boolean, onClose: () => void) {
       if (Math.abs(delta) <= 6) return;
       if (delta < 0) { drag.current = null; return; }
       d.active = true;
-      event.currentTarget.setPointerCapture(event.pointerId);
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* the drag still works without capture */ }
       setDragging(true);
       emitHaptic("grab", { x: event.clientX, y: event.clientY });
     }
     const now = performance.now();
-    d.velocity = (event.clientY - d.previous) / Math.max(1, now - d.at);
+    // Smooth the speed over the last few moves so one jittery sample can't decide a release.
+    d.velocity = d.velocity * 0.4 + ((event.clientY - d.previous) / Math.max(1, now - d.at)) * 0.6;
     d.previous = event.clientY;
     d.at = now;
     const y = delta < 0 ? delta * .2 : delta;
@@ -56,7 +57,9 @@ export function useSheetDrag(open: boolean, onClose: () => void) {
     drag.current = null;
     setDragging(false);
     if (!d.active) return;
-    if (currentY.current > 120 || d.velocity > .6) close();
+    // A finger that stopped before lifting isn't a flick; otherwise momentum counts toward the drag.
+    const speed = performance.now() - d.at > 80 ? 0 : d.velocity;
+    if (currentY.current > 120 || (currentY.current > 24 && currentY.current + speed * 180 > 200)) close();
     else { emitHaptic("unarm"); currentY.current = 0; setDy(0); }
   };
   const cancel = () => { drag.current = null; setDragging(false); currentY.current = 0; setDy(0); };
