@@ -19,10 +19,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Migrations run on start. `serve` runs the API and the background worker together.
+    command: [serve, --api, --worker]
     env_file: .env
     environment:
       DATABASE_URL: postgres://sofar:${POSTGRES_PASSWORD}@db:5432/sofar?sslmode=disable
       SOFAR_ADDR: 0.0.0.0:8080
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     ports:
       # Loopback by default. If your reverse proxy is on another machine, set SOFAR_BIND
       # (for example 0.0.0.0) and TRUSTED_PROXIES in .env; see the README.
@@ -31,5 +39,22 @@ services:
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+
+  # For larger installs: run the worker as its own container and start the app
+  # with `command: [serve, --api, --worker=false]`.
+  # worker:
+  #   build: .
+  #   restart: unless-stopped
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   command: [serve, --api=false, --worker]
+  #   env_file: .env
+  #   environment:
+  #     DATABASE_URL: postgres://sofar:${POSTGRES_PASSWORD}@db:5432/sofar?sslmode=disable
+  #   read_only: true
+  #   tmpfs: [/tmp]
+  #   cap_drop: [ALL]
+  #   security_opt: [no-new-privileges:true]
 volumes:
   postgres-data:

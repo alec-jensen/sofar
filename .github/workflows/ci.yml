@@ -1,0 +1,73 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: sofar
+          POSTGRES_PASSWORD: sofar
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sofar" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      SOFAR_TEST_DATABASE_URL: postgres://sofar:sofar@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal)"
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -tags integration ./...
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: sofar
+          POSTGRES_PASSWORD: sofar
+          POSTGRES_DB: sofar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sofar" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgres://sofar:sofar@localhost:5432/sofar?sslmode=disable
+      SOFAR_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      SOFAR_ENV: development
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: migrate twice (proves idempotency)
+        run: |
+          go run ./cmd/sofar migrate up
+          go run ./cmd/sofar migrate up
+          go run ./cmd/sofar migrate status
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
