@@ -3,6 +3,7 @@ CREATE TABLE month_snapshots (
   month date PRIMARY KEY,
   engine_version integer NOT NULL,
   input_hash text NOT NULL,
+  own_hash text NOT NULL DEFAULT '',
   state jsonb NOT NULL,
   computed_at timestamptz NOT NULL DEFAULT now()
 );
@@ -25,6 +26,8 @@ BEGIN
   -- previous one when the date is near a boundary (zone conversion of an instant)
   INSERT INTO dirty_months (month, reason) VALUES (m, why) ON CONFLICT DO NOTHING;
   INSERT INTO dirty_months (month, reason) VALUES ((m + interval '1 month')::date, why) ON CONFLICT DO NOTHING;
+  -- absorption causes look two months back (I(M-1) against I(M-2))
+  INSERT INTO dirty_months (month, reason) VALUES ((m + interval '2 month')::date, why) ON CONFLICT DO NOTHING;
   IF extract(day FROM d) <= 2 THEN
     INSERT INTO dirty_months (month, reason) VALUES ((m - interval '1 month')::date, why) ON CONFLICT DO NOTHING;
   END IF;

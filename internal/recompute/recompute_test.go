@@ -147,8 +147,8 @@ func TestRecompute_EarlyCutoffStopsChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Stopped || len(res.Computed) != 3 || res.Computed[2] != ym(2026, 5) {
-		t.Fatalf("expected Jan, Feb, then straight to the current month, got %+v", res)
+	if !res.Stopped || len(res.Computed) != 4 || res.Computed[3] != ym(2026, 5) {
+		t.Fatalf("expected Jan to Mar (the dirty marks), then straight to the current month, got %+v", res)
 	}
 	var dirty int
 	e.db.QueryRow(`SELECT count(*) FROM dirty_months`).Scan(&dirty)

@@ -6,7 +6,9 @@ package recompute
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"time"
@@ -76,144 +78,6 @@ func (s *Service) RecordEvent(ctx context.Context, tx *sql.Tx, actor events.Acto
 	return events.Append(ctx, tx, s.Reg, events.New{Actor: actor, Kind: KindBudgetEvent, SubjectType: SubjectMonth, SubjectID: ym.String(), Payload: e})
 }
 
-// Assemble builds the engine inputs for a month from the database (M3: income
-// and spending from the ledger, events, overrides; schedules and lines arrive in M4/M5).
-func (s *Service) Assemble(ctx context.Context, q events.DBTX, ym civil.YearMonth) (budget.MonthInputs, error) {
-	in := budget.MonthInputs{Month: ym}
-	kinds, err := s.accountKinds(ctx, q)
-	if err != nil {
-		return in, err
-	}
-	income, outflows, err := s.classify(ctx, ym, kinds)
-	if err != nil {
-		return in, err
-	}
-	in.Income, in.Outflows = income, outflows
-	prevIncome, _, err := s.classify(ctx, ym.Prev(), kinds)
-	if err != nil {
-		return in, err
-	}
-	for _, it := range prevIncome {
-		in.PrevIncome += it.Amount
-	}
-	evs, err := events.Effective(ctx, q, events.Filter{SubjectType: SubjectMonth, SubjectID: ym.String(), Kinds: []string{KindBudgetEvent, KindPlanOverride}})
-	if err != nil {
-		return in, err
-	}
-	for _, e := range evs {
-		p, err := s.Reg.Decode(e)
-		if err != nil {
-			return in, err
-		}
-		switch v := p.(type) {
-		case *PlanOverride:
-			c := money.Cents(v.Cents)
-			in.PlanOverride = &c // the latest in force wins
-		case *BudgetEvent:
-			in.Events = append(in.Events, budget.Event{ID: e.ID, At: e.At, Kind: budget.EventKind(v.Kind), Amount: money.Cents(v.Amount),
-				Dest: budget.EnvelopeID(v.Dest), Source: budget.EnvelopeID(v.Source), Permanent: v.Permanent, Ref: v.Ref})
-		}
-	}
-	in.Learning, in.Partial, err = s.coverage(ctx, q, ym, kinds)
-	if err != nil {
-		return in, err
-	}
-	if ym == s.today().Month() {
-		t := s.today()
-		in.Today = &t
-	}
-	return in, nil
-}
-
-func (s *Service) accountKinds(ctx context.Context, q events.DBTX) (map[string]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, CASE WHEN active THEN kind ELSE 'closed' END FROM accounts`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var id, kind string
-		if err = rows.Scan(&id, &kind); err != nil {
-			return nil, err
-		}
-		out[id] = kind
-	}
-	return out, rows.Err()
-}
-
-// classify selects the month's counted income and outflows.
-//
-// Income counts when it is a posted, visible inflow in an income category
-// that the user has reviewed. Deposits the user has not reviewed are held out
-// of the plan (S4) until schedules can vouch for them (M4).
-// Outflows are posted, visible, in budget accounts; split transactions
-// contribute one outflow per part; neutral categories do not count; an
-// uncategorized outflow counts as spending (S11).
-func (s *Service) classify(ctx context.Context, ym civil.YearMonth, kinds map[string]string) ([]budget.IncomeItem, []budget.Outflow, error) {
-	page, err := s.Ledger.View(ctx, ledger.Filter{Month: &ym})
-	if err != nil {
-		return nil, nil, err
-	}
-	var income []budget.IncomeItem
-	var outflows []budget.Outflow
-	seq := int64(0)
-	// oldest first so Seq follows the order things happened
-	for i := len(page.Items) - 1; i >= 0; i-- {
-		t := page.Items[i]
-		kind := kinds[t.AccountID]
-		if t.Pending || t.Hidden || (kind != "budget" && kind != "tracked") {
-			continue
-		}
-		if len(t.Splits) > 0 {
-			for _, p := range t.Splits {
-				seq++
-				s.add(&income, &outflows, seq, t, kind, p.Bucket, p.Amount, t.ID+"#"+itoa(p.PartNo), true)
-			}
-			continue
-		}
-		seq++
-		s.add(&income, &outflows, seq, t, kind, t.Bucket, t.Amount, t.ID, t.ReviewedAt != nil)
-	}
-	return income, outflows, nil
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for ; n > 0; n /= 10 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-	}
-	return string(b)
-}
-
-func (s *Service) add(income *[]budget.IncomeItem, outflows *[]budget.Outflow, seq int64, t ledger.Txn, kind, bucket string, amount money.Cents, id string, reviewed bool) {
-	switch bucket {
-	case "income":
-		// a tracked account's inflow is a deposit and counts too (S4); both need review for now
-		if reviewed {
-			*income = append(*income, budget.IncomeItem{ID: id, Amount: amount, Type: t.CategoryID})
-		}
-	case "neutral":
-	default:
-		if kind != "budget" || amount >= 0 {
-			return // refunds and credits are netted by links (M7)
-		}
-		b := budget.BucketSpending
-		switch bucket {
-		case "bills":
-			b = budget.BucketBills
-		case "subscriptions":
-			b = budget.BucketSubscriptions
-		case "savings":
-			b = budget.BucketSavings
-		}
-		*outflows = append(*outflows, budget.Outflow{ID: id, Seq: seq, Date: t.PostedOn, Bucket: b, Amount: -amount, FromDiscretionary: t.FromDiscretionary, Unreviewed: !reviewed})
-	}
-}
-
 // coverage decides learning and partial (S18, S13): learning when no budget
 // account has data covering the previous full month; partial when only some do.
 // M2's account_coverage table refines this with real gaps.
@@ -265,15 +129,15 @@ func (s *Service) GetSnapshot(ctx context.Context, q events.DBTX, ym civil.YearM
 	return snap, json.Unmarshal(raw, &snap.State)
 }
 
-func (s *Service) storeSnapshot(ctx context.Context, tx *sql.Tx, st budget.MonthState) error {
+func (s *Service) storeSnapshot(ctx context.Context, tx *sql.Tx, st budget.MonthState, own string) error {
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO month_snapshots (month, engine_version, input_hash, state, computed_at) VALUES ($1,$2,$3,$4,now())
-		ON CONFLICT (month) DO UPDATE SET engine_version=EXCLUDED.engine_version, input_hash=EXCLUDED.input_hash, state=EXCLUDED.state, computed_at=now()`,
-		monthDate(st.Month), st.EngineVersion, st.InputHash, raw)
+		INSERT INTO month_snapshots (month, engine_version, input_hash, own_hash, state, computed_at) VALUES ($1,$2,$3,$4,$5,now())
+		ON CONFLICT (month) DO UPDATE SET engine_version=EXCLUDED.engine_version, input_hash=EXCLUDED.input_hash, own_hash=EXCLUDED.own_hash, state=EXCLUDED.state, computed_at=now()`,
+		monthDate(st.Month), st.EngineVersion, st.InputHash, own, raw)
 	return err
 }
 
@@ -310,6 +174,15 @@ func (s *Service) RecomputeFrom(ctx context.Context, from civil.YearMonth) (Resu
 	return s.run(ctx, false, &from)
 }
 
+func ownHash(in budget.MonthInputs) string {
+	raw, _ := json.Marshal(in)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// run assembles every month's inputs (cheap, in memory), finds the months whose
+// own inputs differ from what the stored snapshot was built from, and walks
+// forward from the earliest of them. Dirty marks from triggers are honored too.
 func (s *Service) run(ctx context.Context, all bool, from *civil.YearMonth) (Result, error) {
 	var res Result
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -317,8 +190,7 @@ func (s *Service) run(ctx context.Context, all bool, from *civil.YearMonth) (Res
 		return res, err
 	}
 	defer tx.Rollback()
-	// serialize recomputes
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(731892)`); err != nil {
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(731892)`); err != nil { // serialize recomputes
 		return res, err
 	}
 	first, any, err := s.firstDataMonth(ctx, tx)
@@ -329,29 +201,49 @@ func (s *Service) run(ctx context.Context, all bool, from *civil.YearMonth) (Res
 	if current.Before(first) {
 		current = first
 	}
+	d, err := s.load(ctx, tx)
+	if err != nil {
+		return res, err
+	}
+	inputs := map[civil.YearMonth]budget.MonthInputs{}
+	own := map[civil.YearMonth]string{}
+	for m := first; !current.Before(m); m = m.Next() {
+		in, err := s.assemble(ctx, tx, d, m)
+		if err != nil {
+			return res, err
+		}
+		inputs[m], own[m] = in, ownHash(in)
+	}
+	stored := map[civil.YearMonth]string{}
+	rows, err := tx.QueryContext(ctx, `SELECT month, own_hash FROM month_snapshots WHERE engine_version=$1`, budget.EngineVersion)
+	if err != nil {
+		return res, err
+	}
+	for rows.Next() {
+		var md time.Time
+		var h string
+		if err = rows.Scan(&md, &h); err != nil {
+			rows.Close()
+			return res, err
+		}
+		stored[civil.DateOf(md).Month()] = h
+	}
+	rows.Close()
 	dirty, err := s.dirtySet(ctx, tx)
 	if err != nil {
 		return res, err
 	}
-	start := first
-	switch {
-	case all:
-	case from != nil:
-		start = *from
-	default:
-		earliest := current
-		for m := range dirty {
-			if m.Before(earliest) {
-				earliest = m
-			}
-		}
-		start = earliest
-		if !s.snapshotsCurrent(ctx, tx, first, current) {
-			start = first
+	changed := map[civil.YearMonth]bool{current: true}
+	for m := first; !current.Before(m); m = m.Next() {
+		if all || dirty[m] || stored[m] != own[m] || (from != nil && !m.Before(*from)) {
+			changed[m] = true
 		}
 	}
-	if start.Before(first) {
-		start = first
+	start := current
+	for m := range changed {
+		if m.Before(start) {
+			start = m
+		}
 	}
 
 	var prev *budget.MonthState
@@ -367,21 +259,17 @@ func (s *Service) run(ctx context.Context, all bool, from *civil.YearMonth) (Res
 		}
 	}
 	for m := start; !current.Before(m); m = m.Next() {
-		in, err := s.Assemble(ctx, tx, m)
-		if err != nil {
-			return res, err
-		}
-		state := budget.ComputeMonth(prev, in)
+		state := budget.ComputeMonth(prev, inputs[m])
 		old, oerr := s.GetSnapshot(ctx, tx, m)
-		changed := oerr != nil || old.State.InputHash != state.InputHash
-		if changed {
-			if err = s.storeSnapshot(ctx, tx, state); err != nil {
+		stateChanged := oerr != nil || old.State.InputHash != state.InputHash || stored[m] != own[m]
+		if stateChanged {
+			if err = s.storeSnapshot(ctx, tx, state, own[m]); err != nil {
 				return res, err
 			}
 		}
 		res.Computed = append(res.Computed, m)
 		prev = &state
-		if !all && !changed && m != current && m.Next() != current && !dirty[m.Next()] {
+		if !all && !stateChanged && m != current && m.Next() != current && !changed[m.Next()] {
 			// early cutoff: nothing downstream changed, so skip to the current
 			// month, which always recomputes (per-day depends on today)
 			snap, err := s.GetSnapshot(ctx, tx, current.Prev())

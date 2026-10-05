@@ -1,0 +1,66 @@
+# 2026/10/05 18:27:58.652425 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw ops: 3
+# 2026/10/05 18:27:58.652425 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 3
+# 2026/10/05 18:27:58.652425 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 15
+# 2026/10/05 18:27:58.652425 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 2
+# 2026/10/05 18:27:58.652425 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: 4
+# 2026/10/05 18:27:58.655788 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "salary"
+# 2026/10/05 18:27:58.700160 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 0
+# 2026/10/05 18:27:58.700160 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 15
+# 2026/10/05 18:27:58.700160 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 4
+# 2026/10/05 18:27:58.700160 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: 26879
+# 2026/10/05 18:27:58.703341 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "dining_out"
+# 2026/10/05 18:27:58.740599 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 1
+# 2026/10/05 18:27:58.740599 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 28
+# 2026/10/05 18:27:58.740599 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 5
+# 2026/10/05 18:27:58.740599 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: -57
+# 2026/10/05 18:27:58.743811 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "one_time_income"
+# 2026/10/05 18:27:58.802130 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] incremental recompute drifted from a full one:
+# [2026-02-01:58bd9e99036da52aeaf8baa4ba3d31ce3a57512ba4cd14206d48cc64d695798d 2026-03-01:911a055981d1a98be2a689a5bf13b4cd1986a3b9f17d23ffdb1956173ae56c8e 2026-04-01:c2c3bc164b692a98fb1739be3ea13a69b8f0c4261a128ccdbe7ddc82b171217a 2026-05-01:d23da47e7e55d25d35d8c3c5eb2e3f378fa93a26abb2191381c221f63aa26b19]
+# [2026-02-01:58bd9e99036da52aeaf8baa4ba3d31ce3a57512ba4cd14206d48cc64d695798d 2026-03-01:911a055981d1a98be2a689a5bf13b4cd1986a3b9f17d23ffdb1956173ae56c8e 2026-04-01:69c1fc0aea42b9fa24424f96248c4e4282bcf1125f00ef5962644a5c4c926473 2026-05-01:49792f1bf1bae0713a7526e503296f7924b3275bd753086f806a73a5775c8032]
+# 
+v0.4.8#7294611759621237109
+0x1d79af2347e944
+0x55ef1d8abb200
+0x2
+0x2aa1af3b4a2bc
+0x147bc25bec17d7
+0x3
+0x31a4da8b0d893
+0x12c45815d8d735
+0xe
+0x3edb494de7449
+0x10fb8613badaa
+0x1
+0x5f5cdd8ded0ed
+0x6cd1cedb75e29
+0x4
+0x333cbe845b138
+0x0
+0x1b8e9ad1e32ee9
+0x10cbc6c9fd1615
+0x0
+0x5bf7975e25902
+0x1e1a9a992005ad
+0xe
+0xb585a275d3687
+0x7cf13e81f3316
+0x3
+0x623786c7b8b67
+0x1e263fe9912ae6
+0x68ff
+0x1c18365cde03f3
+0x2
+0xab546bfd90f24
+0xc544858caa756
+0x1
+0x11af7c1842feab
+0x1f451f07f2c13e
+0xffffffffffffffff
+0xd2af08f8ccfd
+0xe6bc6c83a8337
+0x4
+0x1cea18b7611dd4
+0x15872962302255
+0x38
+0xe02feb22f2cd3
+0x5
