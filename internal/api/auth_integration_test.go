@@ -50,6 +50,7 @@ func (c *client) do(method, path, body string) (int, map[string]any, *http.Respo
 		}
 	}
 	raw, _ := io.ReadAll(res.Body)
+	checkContract(c.t, r, res.StatusCode, res.Header, raw)
 	var out map[string]any
 	json.Unmarshal(raw, &out)
 	return res.StatusCode, out, res

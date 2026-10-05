@@ -65,10 +65,10 @@ func (s *server) routes() {
 
 	// push
 	m.Handle("GET /api/v1/push/config", s.protect(s.pushConfig))
-	m.Handle("POST /api/v1/push/subscribe", s.protect(s.pushSubscribe))
-	m.Handle("POST /api/v1/push/unsubscribe", s.protect(s.pushUnsubscribe))
+	m.Handle("POST /api/v1/push/subscribe", s.protect(s.idempotent(s.pushSubscribe)))
+	m.Handle("POST /api/v1/push/unsubscribe", s.protect(s.idempotent(s.pushUnsubscribe)))
 	m.Handle("GET /api/v1/push/devices", s.protect(s.pushDevices))
-	m.Handle("POST /api/v1/push/revoke-all", s.protect(s.pushRevokeAll))
+	m.Handle("POST /api/v1/push/revoke-all", s.protect(s.idempotent(s.pushRevokeAll)))
 
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Unknown endpoint.")

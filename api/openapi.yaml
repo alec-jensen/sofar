@@ -1,0 +1,376 @@
+openapi: 3.0.3
+info:
+  title: sofar
+  version: 1.0.0
+  description: >
+    sofar's JSON API. This file is the contract (ADR-0015): handlers are checked
+    against it in tests, and the web client's types are generated from it.
+    Errors always use the Error schema. Writes need the Origin header to match
+    the server and Content-Type application/json.
+servers:
+  - url: /
+tags:
+  - name: health
+  - name: auth
+  - name: push
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: the process is alive
+      operationId: healthz
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /readyz:
+    get:
+      tags: [health]
+      summary: the database is reachable and migrations are current
+      operationId: readyz
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /api/v1/auth/status:
+    get:
+      tags: [auth]
+      summary: whether setup is needed and whether the caller is signed in
+      operationId: authStatus
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthStatus" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/setup:
+    post:
+      tags: [auth]
+      summary: create the one account (needs the server's setup key) and sign in
+      operationId: authSetup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password, setupKey]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                setupKey: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: sign in; code is a six-digit authenticator code or a recovery code
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                code: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: end this session
+      operationId: authLogout
+      security: [{ session: [] }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/totp/setup:
+    post:
+      tags: [auth]
+      summary: start two-step enrollment; returns the secret and otpauth url
+      operationId: totpSetup
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [secret, url]
+                properties:
+                  secret: { type: string }
+                  url: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/totp/confirm:
+    post:
+      tags: [auth]
+      summary: finish enrollment; returns recovery codes, shown once
+      operationId: totpConfirm
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, password]
+              properties:
+                code: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ok, recoveryCodes]
+                properties:
+                  ok: { type: boolean }
+                  recoveryCodes: { $ref: "#/components/schemas/RecoveryCodes" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/totp/disable:
+    post:
+      tags: [auth]
+      summary: turn two-step verification off
+      operationId: totpDisable
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password, code]
+              properties:
+                password: { type: string }
+                code: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/password:
+    post:
+      tags: [auth]
+      summary: change the password; other sessions and push subscriptions are removed
+      operationId: changePassword
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [current, next]
+              properties:
+                current: { type: string }
+                next: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/recovery-codes:
+    post:
+      tags: [auth]
+      summary: replace the recovery codes (needs the password and two-step on)
+      operationId: regenerateRecoveryCodes
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [recoveryCodes]
+                properties:
+                  recoveryCodes: { $ref: "#/components/schemas/RecoveryCodes" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /api/v1/push/config:
+    get:
+      tags: [push]
+      summary: the VAPID public key
+      operationId: pushConfig
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [publicKey]
+                properties:
+                  publicKey: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/push/subscribe:
+    post:
+      tags: [push]
+      summary: register this device for notifications
+      operationId: pushSubscribe
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, keys]
+              properties:
+                endpoint: { type: string }
+                expirationTime: { nullable: true }
+                keys:
+                  type: object
+                  required: [auth, p256dh]
+                  properties:
+                    auth: { type: string }
+                    p256dh: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/push/unsubscribe:
+    post:
+      tags: [push]
+      summary: remove this device
+      operationId: pushUnsubscribe
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [endpoint]
+              properties:
+                endpoint: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/push/devices:
+    get:
+      tags: [push]
+      summary: how many devices receive notifications
+      operationId: pushDevices
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [count]
+                properties:
+                  count: { type: integer, minimum: 0 }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/push/revoke-all:
+    post:
+      tags: [push]
+      summary: stop notifications on every device
+      operationId: pushRevokeAll
+      security: [{ session: [] }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        default: { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: sofar_session
+  requestBodies:
+    Empty:
+      required: true
+      content:
+        application/json:
+          schema: { type: object, additionalProperties: false }
+  responses:
+    Ok:
+      description: ok
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [ok]
+            properties:
+              ok: { type: boolean }
+    Error:
+      description: an error; the code is stable, the message is for people
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+    AuthStatus:
+      type: object
+      additionalProperties: false
+      required: [authenticated, setup, totpEnabled]
+      properties:
+        authenticated: { type: boolean }
+        setup: { type: boolean, description: "true when no account exists yet" }
+        totpEnabled: { type: boolean }
+    RecoveryCodes:
+      type: array
+      minItems: 8
+      maxItems: 8
+      items: { type: string }
+    Page:
+      type: object
+      description: cursor pagination envelope used by list endpoints
+      required: [items]
+      properties:
+        items: { type: array, items: {} }
+        next: { type: string, nullable: true, description: "pass as ?cursor= for the next page" }
