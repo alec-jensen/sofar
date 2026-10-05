@@ -1,6 +1,6 @@
 // sofar's built-in merchant directory, shared with the Go server so both sort
 // the same way. See internal/budget/merchants.go for the server side.
-import directory from "../../internal/budget/merchants.json";
+import directory from "../../internal/normalize/merchants.json";
 import { normalize, type Category } from "./model";
 
 type Entry = { sub: string; name?: string; match: string[] };

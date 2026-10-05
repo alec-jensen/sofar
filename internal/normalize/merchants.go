@@ -1,4 +1,4 @@
-package budget
+package normalize
 
 import (
 	_ "embed"
