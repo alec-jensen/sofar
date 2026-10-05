@@ -19,6 +19,7 @@ import (
 
 	"github.com/alec-jensen/sofar/internal/api"
 	"github.com/alec-jensen/sofar/internal/auth"
+	"github.com/alec-jensen/sofar/internal/civil"
 	"github.com/alec-jensen/sofar/internal/config"
 	"github.com/alec-jensen/sofar/internal/crypt"
 	"github.com/alec-jensen/sofar/internal/jobs"
@@ -26,6 +27,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/metrics"
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
+	"github.com/alec-jensen/sofar/internal/recompute"
 	"github.com/alec-jensen/sofar/internal/store"
 )
 
@@ -36,6 +38,7 @@ const usage = `usage: sofar <command>
 
   serve [--api=true] [--worker=true]   run the web/API server and/or background worker
   migrate up|status                    apply or list database migrations
+  recompute [--all | --from YYYY-MM]   rebuild month snapshots (default: whatever is dirty)
   vapid                                print a new pair of Web Push keys`
 
 func main() {
@@ -51,6 +54,8 @@ func main() {
 		err = serve(os.Args[2:])
 	case "migrate":
 		err = migrate(os.Args[2:])
+	case "recompute":
+		err = recomputeCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		fmt.Println(usage)
 	default:
@@ -201,4 +206,46 @@ func orDefault(v, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func recomputeCmd(args []string) error {
+	fs := flag.NewFlagSet("recompute", flag.ContinueOnError)
+	all := fs.Bool("all", false, "recompute every month from the first with data")
+	from := fs.String("from", "", "recompute from this month (YYYY-MM) forward")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := load()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	db, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err = store.Migrate(ctx, db); err != nil {
+		return err
+	}
+	svc := api.WithDomain(api.Deps{Cfg: cfg, DB: db}).Recompute
+	var res recompute.Result
+	switch {
+	case *all:
+		res, err = svc.RecomputeAll(ctx)
+	case *from != "":
+		ym, perr := civil.ParseYearMonth(*from)
+		if perr != nil {
+			return perr
+		}
+		res, err = svc.RecomputeFrom(ctx, ym)
+	default:
+		res, err = svc.Recompute(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Println("recomputed", len(res.Computed), "month(s)")
+	return nil
 }

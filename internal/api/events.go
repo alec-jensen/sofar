@@ -11,6 +11,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/importer"
 	"github.com/alec-jensen/sofar/internal/ledger"
 	"github.com/alec-jensen/sofar/internal/manual"
+	"github.com/alec-jensen/sofar/internal/recompute"
 )
 
 func eventID(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -78,6 +79,17 @@ func (s *server) reverse(w http.ResponseWriter, r *http.Request, redo bool) {
 				out, err = s.Manual.Redo(ctx, tx, events.ActorUser, id)
 			} else {
 				out, err = s.Manual.Undo(ctx, tx, events.ActorUser, id)
+			}
+			return
+		}) {
+			return
+		}
+	case recompute.KindPlanOverride, recompute.KindBudgetEvent:
+		if !s.withTx(w, r, func(ctx context.Context, tx *sql.Tx) (err error) {
+			if redo {
+				out, err = events.Redo(ctx, tx, events.ActorUser, id, "")
+			} else {
+				out, err = events.Undo(ctx, tx, events.ActorUser, id, "")
 			}
 			return
 		}) {

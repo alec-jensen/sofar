@@ -26,6 +26,7 @@ type client struct {
 	t      *testing.T
 	h      http.Handler
 	cookie *http.Cookie
+	srv    Deps
 }
 
 func (c *client) do(method, path, body string) (int, map[string]any, *http.Response) {
@@ -62,8 +63,8 @@ func newClient(t *testing.T) *client {
 	svc := auth.New(testkit.DB(t), box, "setup-key-of-at-least-24-chars")
 	svc.PasswordCost, svc.CodeCost = 4, 4
 	cfg := config.Config{Origin: origin, StaticDir: "none"}
-	h := New(WithDomain(Deps{Cfg: cfg, DB: svc.DB, Auth: svc, Log: zerolog.Nop()}))
-	return &client{t: t, h: h}
+	deps := WithDomain(Deps{Cfg: cfg, DB: svc.DB, Auth: svc, Log: zerolog.Nop()})
+	return &client{t: t, h: New(deps), srv: deps}
 }
 
 func TestS17_AuthFlowOverHTTP(t *testing.T) {

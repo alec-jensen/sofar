@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// Fataler is the part of testing.TB (and rapid.T) the fixtures need.
+type Fataler interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
+
 // Raw describes a raw transaction to insert. Zero values get sensible defaults.
 type Raw struct {
 	ProviderID        string
@@ -42,7 +48,7 @@ func AccountOfKind(t testing.TB, db *sql.DB, name, kind string) string {
 var rawSeq int
 
 // RawTxn inserts a raw transaction and returns its id.
-func RawTxn(t testing.TB, q interface {
+func RawTxn(t Fataler, q interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }, accountID string, r Raw) string {
 	t.Helper()

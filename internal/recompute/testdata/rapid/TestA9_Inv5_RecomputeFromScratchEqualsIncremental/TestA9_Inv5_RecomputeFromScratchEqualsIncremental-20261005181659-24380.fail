@@ -1,0 +1,189 @@
+# 2026/10/05 18:16:59.742581 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw ops: 11
+# 2026/10/05 18:16:59.742581 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 0
+# 2026/10/05 18:16:59.742581 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 18
+# 2026/10/05 18:16:59.742581 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 4
+# 2026/10/05 18:16:59.742581 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: -33748
+# 2026/10/05 18:16:59.746272 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "salary"
+# 2026/10/05 18:16:59.792092 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 0
+# 2026/10/05 18:16:59.792092 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 8
+# 2026/10/05 18:16:59.792092 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 5
+# 2026/10/05 18:16:59.792092 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: 44906
+# 2026/10/05 18:16:59.795842 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "salary"
+# 2026/10/05 18:16:59.833852 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 0
+# 2026/10/05 18:16:59.833852 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 1
+# 2026/10/05 18:16:59.833852 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 4
+# 2026/10/05 18:16:59.833852 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: 61
+# 2026/10/05 18:16:59.837536 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "one_time_income"
+# 2026/10/05 18:16:59.883632 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 0
+# 2026/10/05 18:16:59.883632 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 1
+# 2026/10/05 18:16:59.883632 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 4
+# 2026/10/05 18:16:59.883632 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: -247
+# 2026/10/05 18:16:59.887843 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "groceries"
+# 2026/10/05 18:16:59.933947 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 0
+# 2026/10/05 18:16:59.933947 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 4
+# 2026/10/05 18:16:59.933947 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 3
+# 2026/10/05 18:16:59.933947 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: 203
+# 2026/10/05 18:16:59.937903 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "salary"
+# 2026/10/05 18:17:00.009708 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 3
+# 2026/10/05 18:17:00.009708 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw move: "2a910ad2-0281-4630-8c9d-9ca2872629b0"
+# 2026/10/05 18:17:00.009708 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw to: 2
+# 2026/10/05 18:17:00.077781 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 3
+# 2026/10/05 18:17:00.077781 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw move: "9444ced6-788a-4959-a562-e19282021948"
+# 2026/10/05 18:17:00.077781 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw to: 2
+# 2026/10/05 18:17:00.139538 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 1
+# 2026/10/05 18:17:00.139538 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 2
+# 2026/10/05 18:17:00.139538 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 4
+# 2026/10/05 18:17:00.139538 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: 90000
+# 2026/10/05 18:17:00.144752 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "salary"
+# 2026/10/05 18:17:00.220895 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 0
+# 2026/10/05 18:17:00.220895 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw day: 24
+# 2026/10/05 18:17:00.220895 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw mon: 5
+# 2026/10/05 18:17:00.220895 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw amt: -1013
+# 2026/10/05 18:17:00.227629 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw cat: "dining_out"
+# 2026/10/05 18:17:00.281590 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 2
+# 2026/10/05 18:17:00.281590 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw hide: "eab60c24-5255-47b7-a8b3-5ce03fb3f55d"
+# 2026/10/05 18:17:00.348748 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw op: 3
+# 2026/10/05 18:17:00.348748 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw move: "7aae3d50-19bf-4ea5-bc61-e19b75d895ac"
+# 2026/10/05 18:17:00.348748 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] [rapid] draw to: 2
+# 2026/10/05 18:17:00.427036 [TestA9_Inv5_RecomputeFromScratchEqualsIncremental] incremental recompute drifted from a full one:
+# [2026-03-01:d945b1ee6242e0724a883f955505c7a7d784013c96a4a370b9d5796ee2504a67 2026-04-01:c6a3524d5d1d5465124669821e0270bb4245699d9e81d30e2f263385a89a506c 2026-05-01:5faa5f9d174f0cbed8e6a380829653f439fe83ede25168a807957d41d32d5da2]
+# [2026-03-01:d945b1ee6242e0724a883f955505c7a7d784013c96a4a370b9d5796ee2504a67 2026-04-01:c6a3524d5d1d5465124669821e0270bb4245699d9e81d30e2f263385a89a506c 2026-05-01:2d32733beee766838439790df323fb43efc0ceb60e453f5cb179a6fb35f63ca0]
+# 
+v0.4.8#10221967994669677434
+0x1845e65fe65899
+0x17c78bf40607e7
+0xa
+0x15587132bdc78b
+0x9cdf0fb3b89dd
+0x0
+0x169d446966040f
+0x1932bc8ac1006b
+0x11
+0x3b18e594b7fd1
+0xaf68ac6799cef
+0x3
+0x1b48c3549e6b96
+0x1d3363052b4b06
+0x83d3
+0x2035a4af1318a
+0x0
+0xd76177b1decd1
+0x1df49888bea2b8
+0x0
+0x1de67fe7b2b40a
+0x19a9acde8a45c3
+0x7
+0x18a5bb7eae1679
+0x17bf30c3db2717
+0x5
+0x4
+0xfa98872fa8285
+0x1bd88fa89c66e5
+0xaf6a
+0x1ac65924aa1b2d
+0x0
+0x195d0c7de7d92c
+0x16ed79e4c4cf6f
+0x0
+0x3347398fc58d5
+0x1f1f78c753e45
+0x0
+0x16685c8869b163
+0x1836ad395d37d6
+0x7
+0x7
+0x3
+0xf59831efa07f1
+0xce32f78fa873f
+0x3d
+0x134e54c7636584
+0x5
+0xb8fd6dedfb948
+0x6e87e62678176
+0x0
+0x1c25958faf72a4
+0x1e75044f7e88ec
+0x0
+0x169104cc88dba5
+0x1abe3b44a67acd
+0x3
+0x1a5a27c2a7ccaf
+0x110d8b89911f8c
+0xf6
+0x1b29f12d2faa30
+0x7
+0x1
+0x845037589a538
+0xba145fd0f751
+0x0
+0x6ade02fe0a7a8
+0x1755b6e6561a8e
+0x3
+0xcff5fb6f96333
+0xc94d5bc6c53bd
+0x2
+0xbc18ad499c29f
+0x1351b9ca00c877
+0xcb
+0x1368bcbea7099e
+0x0
+0x7de3c851ca634
+0x1b19606014bdc9
+0x3
+0x121c1f71d7590
+0x0
+0x9f45aadb8915c
+0x186b9c350df324
+0x1
+0xa159136566a4c
+0x150fb5ba673663
+0x3
+0x1f85ef670f60d3
+0xffffffffffffffff
+0xc348033dc5522
+0xeea90e1e4d97b
+0x1
+0x177507ff63c471
+0x144a0b24d4248c
+0x1
+0x18abec92e0cf74
+0x1d80e4ab29ce3
+0x1
+0x6f522009c5237
+0xc3307d9f7c312
+0x7
+0x5
+0x3
+0x7cb4cb7587062
+0x1f4971fe193e3f
+0xffffffffffffffff
+0xa49dfb22f9c47
+0x0
+0xd2457adc9441f
+0x19ded9877f6adc
+0x0
+0xba81c1fd3dcc3
+0x1691f5516aa53e
+0x17
+0x1fec5449b2068b
+0x17a470153599cf
+0x4
+0x15c64bfb3aab34
+0x13de7534900d9d
+0x3f4
+0x176cf85bfdbc16
+0x7
+0x2
+0x17eb84a23ed369
+0x9e53ffa0910aa
+0x2
+0x17a661a7cdca5b
+0x2
+0x1d423619564abe
+0xe985a59ea10f8
+0x3
+0x121f91127fd3db
+0x6
+0x16d84f485efec1
+0x1d8d7ce9d66b5e
+0x1

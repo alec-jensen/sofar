@@ -7,6 +7,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/importer"
 	"github.com/alec-jensen/sofar/internal/ledger"
 	"github.com/alec-jensen/sofar/internal/manual"
+	"github.com/alec-jensen/sofar/internal/recompute"
 )
 
 // WithDomain builds the domain services over d.DB and one shared event
@@ -18,5 +19,7 @@ func WithDomain(d Deps) Deps {
 	d.Categories = categories.New(d.DB, d.Ledger, reg)
 	d.Importer = importer.New(d.DB, reg)
 	d.Manual = manual.New(d.DB, reg, d.Ledger)
+	d.Recompute = recompute.New(d.DB, reg, d.Ledger, d.Cfg.HomeTZ)
+	d.Events = reg
 	return d
 }

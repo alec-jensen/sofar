@@ -13,12 +13,14 @@ import (
 	"github.com/alec-jensen/sofar/internal/auth"
 	"github.com/alec-jensen/sofar/internal/categories"
 	"github.com/alec-jensen/sofar/internal/config"
+	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/httpx"
 	"github.com/alec-jensen/sofar/internal/importer"
 	"github.com/alec-jensen/sofar/internal/ledger"
 	"github.com/alec-jensen/sofar/internal/manual"
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
+	"github.com/alec-jensen/sofar/internal/recompute"
 )
 
 // Deps is everything the HTTP layer needs.
@@ -35,6 +37,8 @@ type Deps struct {
 	Categories *categories.Service
 	Importer   *importer.Service
 	Manual     *manual.Service
+	Recompute  *recompute.Service
+	Events     *events.Registry
 	Log        zerolog.Logger
 	// Metrics, when set, is served at /metrics to loopback callers and signed-in users.
 	Metrics http.Handler
@@ -105,6 +109,10 @@ func (s *server) routes() {
 	m.Handle("POST /api/v1/imports/{id}/undo", s.protect(s.idempotent(s.undoImport)))
 	m.Handle("POST /api/v1/events/{id}/undo", s.protect(s.idempotent(s.undoEvent)))
 	m.Handle("POST /api/v1/events/{id}/redo", s.protect(s.idempotent(s.redoEvent)))
+
+	m.Handle("GET /api/v1/home", s.protect(s.home))
+	m.Handle("GET /api/v1/months/{ym}/explain", s.protect(s.explain))
+	m.Handle("POST /api/v1/months/{ym}/plan-override", s.protect(s.idempotent(s.planOverride)))
 
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Unknown endpoint.")
