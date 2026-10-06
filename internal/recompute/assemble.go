@@ -12,6 +12,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/civil"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/ledger"
+	"github.com/alec-jensen/sofar/internal/links"
 	"github.com/alec-jensen/sofar/internal/money"
 	"github.com/alec-jensen/sofar/internal/normalize"
 	"github.com/alec-jensen/sofar/internal/recurrence"
@@ -39,6 +40,7 @@ type data struct {
 	txns   []ledger.Txn // oldest first
 	items  []recurring.Item
 	links  map[string]map[string]bool
+	net    links.Net // reimbursements and refunds netted against expenses (S12)
 	cfg    []budgetcfg.Version
 	goals  []budgetcfg.Goal
 	events map[civil.YearMonth][]eventRow
@@ -75,6 +77,9 @@ func (s *Service) load(ctx context.Context, q events.DBTX) (*data, error) {
 		return nil, err
 	}
 	if d.links, err = recurring.Links(ctx, q); err != nil {
+		return nil, err
+	}
+	if d.net, err = links.LoadNet(ctx, q); err != nil {
 		return nil, err
 	}
 	if d.cfg, err = budgetcfg.Versions(ctx, q); err != nil {
@@ -292,10 +297,31 @@ func (s *Service) classify(d *data, ym civil.YearMonth) classified {
 				continue
 			}
 			for _, p := range t.Splits {
+				part := p.PartNo
+				amount := p.Amount + money.Cents(d.net.Expense[links.ExpenseKey(t.ID, &part)])
+				if p.Amount < 0 && amount >= 0 {
+					continue // fully reimbursed
+				}
 				seq++
-				s.outflow(&out, seq, t, kind, p.Bucket, p.Amount, t.ID+"#"+strconv.Itoa(p.PartNo), nil)
+				s.outflow(&out, seq, t, kind, p.Bucket, amount, t.ID+"#"+strconv.Itoa(p.PartNo), nil)
 			}
 			continue
+		}
+		// a payment linked to expenses is not income; only an unlinked remainder is a deposit
+		if linked := d.net.Payment[t.ID]; t.Amount > 0 && linked > 0 {
+			t.Amount -= money.Cents(linked)
+			if t.Amount <= 0 {
+				continue
+			}
+		}
+		// netting lands in the expense's own month, whenever the payment arrived
+		if t.Amount < 0 {
+			if net := d.net.Expense[t.ID]; net > 0 {
+				t.Amount += money.Cents(net)
+				if t.Amount >= 0 {
+					continue
+				}
+			}
 		}
 		reviewed := t.ReviewedAt != nil
 		if t.Amount > 0 && t.Bucket == "savings" && kind == "tracked" {

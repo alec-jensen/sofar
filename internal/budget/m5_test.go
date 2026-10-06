@@ -230,8 +230,24 @@ func TestA9_Inv6_RolloverTwiceSame(t *testing.T) {
 	}
 }
 
+// Invariant 14 at the engine: the engine is a pure function of its inputs, so a
+// month computed again from the inputs it had before a tentative link netted
+// anything is identical to the first time, hash included. The database-level
+// version (reject, then the snapshot hash is unchanged) is in internal/links.
 func TestA9_Inv14_RejectTentativeRevertsExactly(t *testing.T) {
-	t.Skip("needs links, M7")
+	run := func(spent money.Cents) MonthState {
+		s := newScenario(t).withFixed(usd(2000))
+		s.keep = true
+		s.month("2026-02").prevIncome(usd(4000)).run()
+		return s.month("2026-03").prevIncome(usd(4000)).spend(spent).run()
+	}
+	before, netted, after := run(usd(500)), run(usd(450)), run(usd(500))
+	if before.InputHash == netted.InputHash || before.SpendLeft == netted.SpendLeft {
+		t.Fatal("the tentative link netted")
+	}
+	if before.InputHash != after.InputHash || before.SpendLeft != after.SpendLeft || before.Envelopes[EnvSavings] != after.Envelopes[EnvSavings] {
+		t.Fatalf("rejecting restores the prior state exactly: %+v vs %+v", before, after)
+	}
 }
 
 func TestS10_ReassignAutoCarryRefunds(t *testing.T) {

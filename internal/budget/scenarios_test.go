@@ -190,8 +190,21 @@ func TestS2_LeftoverPoolSweepsToSavings(t *testing.T) { // A-002
 	}
 }
 
+// Example F at the engine: the assembly nets a linked reimbursement into the
+// expense's month, so the engine just sees less spending, and a cover that was
+// larger than the new overspend shrinks and its source is refunded (A-006).
 func TestS2_ExampleF_ReimbursementAcrossMonths(t *testing.T) {
-	t.Skip("M7: links")
+	build := func(spent money.Cents) MonthState {
+		s := newScenario(t).withFixed(usd(2000))
+		s.keep = true
+		s.month("2026-02").prevIncome(usd(4000)).run()
+		s.month("2026-03").prevIncome(usd(4000)).spend(spent).cover(EnvSavings, usd(180)).run()
+		return s.month("2026-04").prevIncome(usd(4000)).run()
+	}
+	gross, netted := build(usd(2180)), build(usd(2130)) // a $50 reimbursement lands in April
+	if gross.Envelopes[EnvSavings]-netted.Envelopes[EnvSavings] != -usd(50) {
+		t.Fatalf("the cover shrinks by $50 and savings is refunded: %v vs %v", gross.Envelopes[EnvSavings], netted.Envelopes[EnvSavings])
+	}
 }
 
 func TestS2_FirstPlanIsPlanMinusFixed(t *testing.T) {
