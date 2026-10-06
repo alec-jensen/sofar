@@ -226,3 +226,36 @@ func TestS18a_E6_LowPrecisionAutoDemoted(t *testing.T) {
 	_ = civil.Date{}
 	_ = time.Now
 }
+
+func TestS18a_InstallSeedsIsIdempotentAndLeavesUserRules(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	mine := e.addRule(rule("groceries", "heb"))
+	var first, second int
+	e.tx(func(tx *sql.Tx) {
+		var err error
+		if first, err = e.svc.InstallSeeds(ctx, tx); err != nil {
+			t.Fatal(err)
+		}
+	})
+	e.tx(func(tx *sql.Tx) {
+		var err error
+		if second, err = e.svc.InstallSeeds(ctx, tx); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if first == 0 || first != second {
+		t.Fatalf("reinstalling replaces the pack, giving the same count: %d %d", first, second)
+	}
+	list, _ := e.svc.Rules.List(ctx, e.db)
+	if len(list) != first+1 {
+		t.Fatalf("one user rule plus %d seed rules, got %d", first, len(list))
+	}
+	var found bool
+	for _, r := range list {
+		found = found || (r.ID == mine.ID && r.Layer == rules.LayerUser)
+	}
+	if !found {
+		t.Fatal("the user's rule is untouched")
+	}
+}
