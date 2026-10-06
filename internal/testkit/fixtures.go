@@ -24,6 +24,7 @@ type Raw struct {
 	Amount            int64 // cents, negative is an outflow
 	Description       string
 	Payee             string
+	Memo              string
 	Pending           bool
 }
 
@@ -65,9 +66,9 @@ func RawTxn(t Fataler, q interface {
 	}
 	var id string
 	err := q.QueryRowContext(context.Background(), `
-		INSERT INTO raw_transactions (account_id, provider_txn_id, posted_on, posted_instant, transacted_on, transacted_instant, amount, description, payee, pending)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-		accountID, r.ProviderID, r.PostedOn, r.PostedInstant, transacted, r.TransactedInstant, r.Amount, r.Description, r.Payee, r.Pending).Scan(&id)
+		INSERT INTO raw_transactions (account_id, provider_txn_id, posted_on, posted_instant, transacted_on, transacted_instant, amount, description, payee, memo, pending)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+		accountID, r.ProviderID, r.PostedOn, r.PostedInstant, transacted, r.TransactedInstant, r.Amount, r.Description, r.Payee, r.Memo, r.Pending).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert raw transaction: %v", err)
 	}
