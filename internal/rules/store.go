@@ -68,6 +68,12 @@ func (s stored) rule(id string, updated time.Time) (Rule, error) {
 	return r, nil
 }
 
+// WithDefaults fills the layer, stage, priority and provenance a caller left empty.
+func (r Rule) WithDefaults() Rule {
+	fill(&r)
+	return r
+}
+
 func fill(r *Rule) {
 	if r.Stage == "" {
 		r.Stage = StageDefault

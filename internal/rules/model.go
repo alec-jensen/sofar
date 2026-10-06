@@ -436,6 +436,7 @@ func (c Condition) matchText(t Txn) (bool, string) {
 	got = t.text(c.Field)
 	val, _ := c.Value.(string)
 	lv := strings.ToLower(val)
+	spaced := got // regular expressions and fuzzy matching see the spaced key
 	if c.Field == "merchant" {
 		// compare without spaces, so "heb" matches "h e b" and "bluebottle" matches "blue bottle"
 		lv = strings.ReplaceAll(normalize.Normalize(val), " ", "")
@@ -457,7 +458,7 @@ func (c Condition) matchText(t Txn) (bool, string) {
 		return strings.HasSuffix(got, lv), why
 	case "regex", "not_regex":
 		re := compile(val)
-		matched := re != nil && re.MatchString(got)
+		matched := re != nil && re.MatchString(spaced)
 		if c.Op == "not_regex" {
 			return !matched, why
 		}
@@ -476,7 +477,7 @@ func (c Condition) matchText(t Txn) (bool, string) {
 		return in, why
 	case "fuzzy_gte":
 		min, _ := num(c.Value2)
-		return normalize.Similarity(got, val) >= min, why
+		return normalize.Similarity(spaced, val) >= min, why
 	}
 	return false, why
 }
