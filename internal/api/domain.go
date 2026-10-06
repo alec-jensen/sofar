@@ -4,6 +4,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/accounts"
 	"github.com/alec-jensen/sofar/internal/budgetcfg"
 	"github.com/alec-jensen/sofar/internal/categories"
+	"github.com/alec-jensen/sofar/internal/categorize"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/importer"
 	"github.com/alec-jensen/sofar/internal/ledger"
@@ -26,6 +27,8 @@ func WithDomain(d Deps) Deps {
 	d.Recurring.Now = d.Recompute.Now
 	d.Budget = budgetcfg.New(d.DB, reg, d.Categories, d.Cfg.HomeTZ)
 	d.Budget.Now = d.Recompute.Now
+	d.Categorize = categorize.New(d.DB, d.Ledger, reg)
+	d.Categorize.Now = d.Recompute.Now
 	d.Events = reg
 	return d
 }

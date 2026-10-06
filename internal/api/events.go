@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/alec-jensen/sofar/internal/budgetcfg"
+	"github.com/alec-jensen/sofar/internal/categorize"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/httpx"
 	"github.com/alec-jensen/sofar/internal/importer"
@@ -138,6 +139,17 @@ func (s *server) reverse(w http.ResponseWriter, r *http.Request, redo bool) {
 			} else {
 				out, err = s.Ledger.Undo(ctx, tx, events.ActorUser, id, "")
 			}
+			return
+		}) {
+			return
+		}
+	case categorize.KindApplyPast:
+		if redo {
+			httpx.Fail(w, http.StatusUnprocessableEntity, "not_undoable", "Apply the change again instead.")
+			return
+		}
+		if !s.withTx(w, r, func(ctx context.Context, tx *sql.Tx) (err error) {
+			out, err = s.Categorize.UndoApplyPast(ctx, tx, events.ActorUser, id)
 			return
 		}) {
 			return

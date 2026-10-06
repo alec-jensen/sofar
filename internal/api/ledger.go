@@ -15,6 +15,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/accounts"
 	"github.com/alec-jensen/sofar/internal/budgetcfg"
 	"github.com/alec-jensen/sofar/internal/categories"
+	"github.com/alec-jensen/sofar/internal/categorize"
 	"github.com/alec-jensen/sofar/internal/civil"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/httpx"
@@ -50,7 +51,7 @@ func (s *server) withTx(w http.ResponseWriter, r *http.Request, fn func(ctx cont
 func (s *server) fail(w http.ResponseWriter, err error) {
 	var pg *pgconn.PgError
 	switch {
-	case errors.Is(err, ledger.ErrNotFound), errors.Is(err, accounts.ErrNotFound), errors.Is(err, categories.ErrNotFound), errors.Is(err, manual.ErrNotFound), errors.Is(err, events.ErrNotFound), errors.Is(err, recurring.ErrNotFound), errors.Is(err, budgetcfg.ErrNotFound):
+	case errors.Is(err, ledger.ErrNotFound), errors.Is(err, accounts.ErrNotFound), errors.Is(err, categories.ErrNotFound), errors.Is(err, manual.ErrNotFound), errors.Is(err, events.ErrNotFound), errors.Is(err, recurring.ErrNotFound), errors.Is(err, budgetcfg.ErrNotFound), errors.Is(err, categorize.ErrNotFound):
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Not found.")
 	case errors.Is(err, ledger.ErrSplitSum):
 		httpx.Fail(w, http.StatusUnprocessableEntity, "split_sum", "Split parts must add up to the transaction total.")
@@ -62,7 +63,7 @@ func (s *server) fail(w http.ResponseWriter, err error) {
 		httpx.Fail(w, http.StatusConflict, "event_state", "That change is already in the state you asked for.")
 	case errors.Is(err, manual.ErrNotManual):
 		httpx.Fail(w, http.StatusUnprocessableEntity, "not_manual", "Only transactions you entered yourself can be edited.")
-	case errors.Is(err, ledger.ErrInvalid), errors.Is(err, categories.ErrInvalid), errors.Is(err, accounts.ErrInvalid), errors.Is(err, manual.ErrInvalid), errors.Is(err, recurring.ErrInvalid), errors.Is(err, budgetcfg.ErrInvalid), errors.Is(err, errBadRequest):
+	case errors.Is(err, ledger.ErrInvalid), errors.Is(err, categories.ErrInvalid), errors.Is(err, accounts.ErrInvalid), errors.Is(err, manual.ErrInvalid), errors.Is(err, recurring.ErrInvalid), errors.Is(err, budgetcfg.ErrInvalid), errors.Is(err, categorize.ErrInvalid), errors.Is(err, errBadRequest):
 		httpx.Fail(w, http.StatusBadRequest, "invalid_input", cleanMessage(err))
 	case errors.As(err, &pg) && pg.Code == "23503":
 		httpx.Fail(w, http.StatusBadRequest, "unknown_reference", "That category or account does not exist.")

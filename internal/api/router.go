@@ -13,6 +13,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/auth"
 	"github.com/alec-jensen/sofar/internal/budgetcfg"
 	"github.com/alec-jensen/sofar/internal/categories"
+	"github.com/alec-jensen/sofar/internal/categorize"
 	"github.com/alec-jensen/sofar/internal/config"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/httpx"
@@ -42,6 +43,7 @@ type Deps struct {
 	Recompute  *recompute.Service
 	Recurring  *recurring.Service
 	Budget     *budgetcfg.Service
+	Categorize *categorize.Service
 	Events     *events.Registry
 	Log        zerolog.Logger
 	// Metrics, when set, is served at /metrics to loopback callers and signed-in users.
@@ -148,6 +150,13 @@ func (s *server) routes() {
 
 	m.Handle("POST /api/v1/preview", s.protect(s.preview))
 	m.Handle("GET /api/v1/rollover/checklist", s.protect(s.checklist))
+
+	m.Handle("GET /api/v1/review/queue", s.protect(s.reviewQueue))
+	m.Handle("POST /api/v1/review/batch", s.protect(s.idempotent(s.reviewBatch)))
+	m.Handle("POST /api/v1/review/{txn}/confirm", s.protect(s.idempotent(s.reviewConfirm)))
+	m.Handle("POST /api/v1/review/{txn}/recategorize", s.protect(s.idempotent(s.reviewRecategorize)))
+	m.Handle("GET /api/v1/categories/{id}/proposals", s.protect(s.categoryProposals))
+	m.Handle("POST /api/v1/categories/{id}/move-merchants", s.protect(s.idempotent(s.moveMerchants)))
 
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Unknown endpoint.")

@@ -679,6 +679,150 @@ paths:
         "200": { $ref: "#/components/responses/EventResult" }
         default: { $ref: "#/components/responses/Error" }
 
+  /api/v1/categories/{id}/proposals:
+    get:
+      tags: [categories]
+      summary: merchants that probably belong in a new category
+      operationId: categoryProposals
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [merchant_key, count, current_category]
+                      properties:
+                        merchant_key: { type: string }
+                        count: { type: integer }
+                        current_category: { type: string, nullable: true }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/categories/{id}/move-merchants:
+    post:
+      tags: [categories]
+      summary: move merchants into a category, as one undoable change per merchant
+      operationId: moveMerchants
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [merchant_keys]
+              properties:
+                merchant_keys: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: ok; each event id can be passed to /events/{id}/undo
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [event_ids]
+                properties:
+                  event_ids: { type: array, items: { type: integer } }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/review/queue:
+    get:
+      tags: [review]
+      summary: transactions waiting for review, uncertain first
+      operationId: reviewQueue
+      security: [{ session: [] }]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total]
+                properties:
+                  total: { type: integer }
+                  items: { type: array, items: { $ref: "#/components/schemas/QueueItem" } }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/review/batch:
+    post:
+      tags: [review]
+      summary: confirm every waiting transaction of one merchant, calling out outliers
+      operationId: reviewBatch
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [merchant_key, category]
+              properties:
+                merchant_key: { type: string }
+                category: { type: string }
+                scope: { type: string }
+                session_id: { type: string }
+                dwell_ms: { type: integer }
+                include_outliers: { type: boolean }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [confirmed, outliers, prompts]
+                properties:
+                  confirmed: { type: array, items: { type: string } }
+                  outliers: { type: array, items: { type: string } }
+                  prompts: { type: array, items: { $ref: "#/components/schemas/ReviewPrompt" } }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/review/{txn}/confirm:
+    post:
+      tags: [review]
+      summary: accept the suggestion on a transaction
+      operationId: reviewConfirm
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Txn" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewBody" }
+      responses:
+        "200": { $ref: "#/components/responses/ReviewResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/review/{txn}/recategorize:
+    post:
+      tags: [review]
+      summary: choose a category and how widely to learn from it
+      operationId: reviewRecategorize
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Txn" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewBody" }
+      responses:
+        "200": { $ref: "#/components/responses/ReviewResult" }
+        default: { $ref: "#/components/responses/Error" }
+
   /api/v1/imports:
     post:
       tags: [imports]
@@ -1464,6 +1608,11 @@ components:
       in: path
       required: true
       schema: { type: string }
+    Txn:
+      name: txn
+      in: path
+      required: true
+      schema: { type: string }
     IntId:
       name: id
       in: path
@@ -1476,6 +1625,28 @@ components:
         application/json:
           schema: { type: object, additionalProperties: false }
   responses:
+    ReviewResult:
+      description: ok
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [transaction, weight, learned_rules, prompts, proposal]
+            properties:
+              transaction: { $ref: "#/components/schemas/Transaction" }
+              weight: { type: number }
+              learned_rules: { type: array, items: { type: string } }
+              prompts: { type: array, items: { $ref: "#/components/schemas/ReviewPrompt" } }
+              proposal:
+                type: object
+                additionalProperties: false
+                required: [merchant_key, unreviewed, labeled, suggested_scope]
+                properties:
+                  merchant_key: { type: string }
+                  unreviewed: { type: integer }
+                  labeled: { type: integer }
+                  suggested_scope: { type: string }
     Ok:
       description: ok
       content:
@@ -1523,6 +1694,53 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    ReviewBody:
+      type: object
+      additionalProperties: false
+      properties:
+        category: { type: string }
+        scope: { type: string, description: "this_time, merchant, merchant_amount_range, merchant_account or description_pattern" }
+        session_id: { type: string }
+        dwell_ms: { type: integer }
+    ReviewPrompt:
+      type: object
+      additionalProperties: false
+      required: [kind, rule_id, detail]
+      properties:
+        kind: { type: string }
+        rule_id: { type: string, nullable: true }
+        detail: { type: string }
+    Suggestion:
+      type: object
+      nullable: true
+      additionalProperties: false
+      required: [category, source, confidence, reason, rule_id, alternatives, flags]
+      properties:
+        category: { type: string }
+        source: { type: string }
+        confidence: { type: number }
+        reason: { type: string }
+        rule_id: { type: string, nullable: true }
+        alternatives:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [category, confidence, source]
+            properties:
+              category: { type: string }
+              confidence: { type: number }
+              source: { type: string }
+        flags: { type: array, items: { type: string } }
+    QueueItem:
+      type: object
+      additionalProperties: false
+      required: [transaction, suggestion, group_key, audit]
+      properties:
+        transaction: { $ref: "#/components/schemas/Transaction" }
+        suggestion: { $ref: "#/components/schemas/Suggestion" }
+        group_key: { type: string }
+        audit: { type: boolean }
     Error:
       type: object
       additionalProperties: false

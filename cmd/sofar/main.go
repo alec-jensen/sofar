@@ -19,6 +19,7 @@ import (
 
 	"github.com/alec-jensen/sofar/internal/api"
 	"github.com/alec-jensen/sofar/internal/auth"
+	"github.com/alec-jensen/sofar/internal/categorize"
 	"github.com/alec-jensen/sofar/internal/civil"
 	"github.com/alec-jensen/sofar/internal/config"
 	"github.com/alec-jensen/sofar/internal/crypt"
@@ -186,7 +187,9 @@ func serve(args []string) error {
 			_, err := push.Send(ctx, notify.Payload{Title: title, Body: body, URL: "/", Tag: "sofar-rollover"}, 86400)
 			return err
 		}))
+		q.Register(categorize.NightlyKind, categorize.NightlyHandler(deps.Categorize, log))
 		sched := jobs.NewScheduler(db, log, cfg.HomeTZ)
+		sched.Add(categorize.NightlyPeriodic())
 		sched.Add(rollover.Periodic())
 		go q.Run(ctx, 5*time.Second)
 		go sched.Run(ctx, time.Minute)
