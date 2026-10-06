@@ -51,6 +51,9 @@ var ambiguousSeed = map[string]bool{
 	"cvs": true, "walgreens": true, "seven eleven": true, "kroger": true, "paypal": true, "venmo": true, "apple": true, "google": true,
 }
 
+// SeedAmbiguous reports whether a merchant key is on the built-in list of merchants that sell across categories.
+func SeedAmbiguous(key string) bool { return ambiguousSeed[key] }
+
 // Merchant is a merchant entity.
 type Merchant struct {
 	ID        string

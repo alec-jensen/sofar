@@ -26,12 +26,17 @@ CREATE TABLE label_events (
   weight double precision NOT NULL DEFAULT 1,
   session_id text NOT NULL DEFAULT '',
   dwell_ms integer,
+  merchant_key text NOT NULL DEFAULT '',
+  amount bigint,
+  account_id uuid,
+  rule_id uuid,
   label_source text NOT NULL DEFAULT 'user',   -- user or legacy-import: only these train (invariant 12)
   undone boolean NOT NULL DEFAULT false,
   at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX label_events_txn_idx ON label_events (txn_id, at);
 CREATE INDEX label_events_at_idx ON label_events (at);
+CREATE INDEX label_events_merchant_idx ON label_events (merchant_key) WHERE NOT undone;
 
 CREATE TABLE rule_exceptions (
   txn_id uuid NOT NULL REFERENCES raw_transactions(id),
