@@ -391,5 +391,33 @@ func LoadNet(ctx context.Context, q events.DBTX) (Net, error) {
 		n.Expense[ExpenseKey(e, pp)] += a
 		n.Payment[p] += a
 	}
-	return n, rows.Err()
+	if err = rows.Err(); err != nil {
+		return n, err
+	}
+	// a receivable marked "treat as netted now" nets what has not landed yet (S12a)
+	pend, err := q.QueryContext(ctx, `
+		SELECT r.expense_txn_id, r.part_no, r.amount - coalesce((SELECT sum(l.amount) FROM links l WHERE l.receivable_id = r.id AND l.state IN ('tentative','confirmed')), 0)
+		FROM receivables r WHERE r.netted_now AND r.written_off_at IS NULL AND r.deleted_at IS NULL`)
+	if err != nil {
+		return n, err
+	}
+	defer pend.Close()
+	for pend.Next() {
+		var e string
+		var part sql.NullInt32
+		var a int64
+		if err = pend.Scan(&e, &part, &a); err != nil {
+			return n, err
+		}
+		if a <= 0 {
+			continue
+		}
+		var pp *int
+		if part.Valid {
+			v := int(part.Int32)
+			pp = &v
+		}
+		n.Expense[ExpenseKey(e, pp)] += a
+	}
+	return n, pend.Err()
 }
