@@ -25,6 +25,12 @@ type Pay struct {
 	PayerKnown     bool // the payer is a known reimburser
 	// ShareRatio is the payer's learned typical share, 0 if unknown.
 	ShareRatio float64
+	// ShareSpread is how much their share varies (tips, rounding): it widens the tolerance.
+	ShareSpread float64
+	// Categories counts the confirmed paybacks per expense category.
+	Categories map[string]int
+	// Paybacks is how many confirmed paybacks this payer has.
+	Paybacks int
 }
 
 // Cand is the expense side: an expense with money left to be paid back.
@@ -41,6 +47,9 @@ type Cand struct {
 	PartNo      *int
 	Receivable  string // an open receivable on it, if any
 	ReceivedFor int64  // cents of the receivable still owed
+	// PaidBySamePayer is set when this payer already paid part of this expense: a
+	// second payback on the same expense is unusual.
+	PaidBySamePayer bool
 }
 
 // Features describe one (payment, expense) pair. They are stored with every
@@ -58,6 +67,9 @@ type Features struct {
 	PayerKnown    bool    `json:"payer_known"`
 	PayerShare    bool    `json:"payer_share"` // the ratio matches the payer's learned share
 	Over          bool    `json:"over"`        // the payment is more than what is left
+	PriorPayer    bool    `json:"prior_payer"` // this payer already paid back part of it
+	CatSeen       bool    `json:"cat_seen"`    // this payer has paid back this kind of expense before
+	CatNew        bool    `json:"cat_new"`     // an experienced payer who has never paid back this kind
 	Receivable    bool    `json:"receivable"`
 	Candidates    int     `json:"candidates"`
 	// Weak marks a candidate that only fits by amount and time: it is shown in the
@@ -86,13 +98,16 @@ func Extract(p Pay, c Cand, x FeatureCtx) Features {
 	if x.FractionTolerance == 0 {
 		x.FractionTolerance = 0.04
 	}
+	if t := 2 * p.ShareSpread; t > x.FractionTolerance {
+		x.FractionTolerance = math.Min(t, 0.12)
+	}
 	if x.PostingDelayDays == 0 {
 		x.PostingDelayDays = 3
 	}
 	if x.LookbackDays == 0 {
 		x.LookbackDays = 30
 	}
-	f := Features{Candidates: x.Candidates, PayerKnown: p.PayerKnown, Receivable: c.Receivable != ""}
+	f := Features{Candidates: x.Candidates, PayerKnown: p.PayerKnown, Receivable: c.Receivable != "", PriorPayer: c.PaidBySamePayer}
 	if c.Total > 0 {
 		f.Ratio = float64(p.Amount) / float64(c.Total)
 	}
@@ -119,6 +134,11 @@ func Extract(p Pay, c Cand, x FeatureCtx) Features {
 	f.SameMerchant = c.Merchant != "" && strings.Contains(squash(p.Text), squash(c.Merchant)) && len(c.Merchant) >= 4
 	if p.ShareRatio > 0 && math.Abs(f.Ratio-p.ShareRatio) <= x.FractionTolerance {
 		f.PayerShare = true
+	}
+	if n := p.Categories[c.Category]; n >= 2 {
+		f.CatSeen = true
+	} else if p.Paybacks >= 3 && n == 0 && c.Category != "" {
+		f.CatNew = true
 	}
 	f.Weak = !(f.CleanFraction > 0 || f.MemoMatch || f.SameMerchant || f.PayerShare || f.Receivable)
 	return f
@@ -173,8 +193,8 @@ func tokens(s string) []string {
 
 // Starter prior weights (S12b cold start): they only ever produce suggestions.
 var weights = struct {
-	Bias, Clean, Round, LagNear, LagMid, LagFar, TooEarly, Food, Memo, Merchant, Payer, Share, Receivable, Crowded float64
-}{Bias: -2.2, Clean: 1.6, Round: 0.4, LagNear: 1.0, LagMid: 0.5, LagFar: -0.5, TooEarly: -3, Food: 1.2, Memo: 1.5, Merchant: 3, Payer: 1.0, Share: 1.5, Receivable: 4, Crowded: -0.3}
+	Bias, Clean, Round, LagNear, LagMid, LagFar, TooEarly, Food, Memo, Merchant, Payer, Share, Receivable, Crowded, PriorPayer, CatSeen, CatNew float64
+}{CatSeen: 0.8, CatNew: -1.0, PriorPayer: -4.0, Bias: -2.2, Clean: 1.6, Round: 0.4, LagNear: 1.0, LagMid: 0.5, LagFar: -0.5, TooEarly: -3, Food: 1.2, Memo: 1.5, Merchant: 3, Payer: 1.0, Share: 1.5, Receivable: 4, Crowded: -0.3}
 
 func sigmoid(z float64) float64 { return 1 / (1 + math.Exp(-z)) }
 
@@ -232,6 +252,16 @@ func Score(f Features, pay int64, c Cand) (float64, []string) {
 	}
 	if f.Candidates >= 4 {
 		z += w.Crowded
+	}
+	if f.PriorPayer {
+		z += w.PriorPayer
+	}
+	if f.CatSeen {
+		z += w.CatSeen
+		why = append(why, "a kind of expense they have paid back before")
+	}
+	if f.CatNew {
+		z += w.CatNew
 	}
 	return sigmoid(z), why
 }

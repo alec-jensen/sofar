@@ -823,6 +823,363 @@ paths:
         "200": { $ref: "#/components/responses/ReviewResult" }
         default: { $ref: "#/components/responses/Error" }
 
+  /api/v1/owed:
+    get:
+      tags: [reimbursements]
+      summary: money owed to you, payments waiting for their expense, and aging alerts
+      operationId: owed
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [receivables, held, alerts]
+                properties:
+                  receivables: { type: array, items: { $ref: "#/components/schemas/Receivable" } }
+                  held: { type: array, items: { $ref: "#/components/schemas/HeldPayment" } }
+                  alerts:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [receivable_id, age_days, threshold]
+                      properties:
+                        receivable_id: { type: string }
+                        age_days: { type: integer }
+                        threshold: { type: integer }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/receivables:
+    post:
+      tags: [reimbursements]
+      summary: record that someone owes you for an expense
+      operationId: createReceivable
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expense_id, amount]
+              properties:
+                expense_id: { type: string }
+                part_no: { type: integer, nullable: true }
+                amount: { type: integer, format: int64, minimum: 1 }
+                amount_max: { type: integer, format: int64, nullable: true }
+                counterparty_id: { type: string, nullable: true }
+                expected_by: { type: string, nullable: true }
+                netted_now: { type: boolean, nullable: true }
+                note: { type: string }
+                source: { type: string }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Receivable" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/receivables/{id}/received:
+    post:
+      tags: [reimbursements]
+      summary: mark a receivable received, by a payment or by cash
+      operationId: receivableReceived
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                payment_id: { type: string }
+                amount: { type: integer, format: int64 }
+                cash:
+                  type: object
+                  additionalProperties: false
+                  required: [date]
+                  properties:
+                    account_id: { type: string }
+                    date: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Receivable" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/receivables/{id}/write-off:
+    post:
+      tags: [reimbursements]
+      summary: give up on money owed; the expense counts in full again, and this can be undone
+      operationId: receivableWriteOff
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200":
+          description: ok; event_id can be passed to /events/{id}/undo
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [receivable, event_id]
+                properties:
+                  receivable: { $ref: "#/components/schemas/Receivable" }
+                  event_id: { type: integer }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/payments/{txn}/candidates:
+    get:
+      tags: [reimbursements]
+      summary: the link picker, every candidate considered for one payment
+      operationId: paymentCandidates
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Txn" }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MatchDecision" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/debug/match/{txn}:
+    get:
+      tags: [reimbursements]
+      summary: the matching debugger, a replay of why a payment won or abstained
+      operationId: debugMatch
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Txn" }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MatchDecision" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/links:
+    post:
+      tags: [reimbursements]
+      summary: link a payment to an expense, or accept a stored suggestion
+      operationId: createLink
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [payment_id]
+              properties:
+                payment_id: { type: string }
+                expense_id: { type: string }
+                part_no: { type: integer, nullable: true }
+                amount: { type: integer, format: int64 }
+                override: { type: boolean }
+                suggestion: { type: integer, minimum: 0 }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Link" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/links/{id}/confirm:
+    post:
+      tags: [reimbursements]
+      summary: confirm a tentative link
+      operationId: confirmLink
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/IntId" }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Link" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/links/{id}/reject:
+    post:
+      tags: [reimbursements]
+      summary: reject a link; the netting reverts exactly
+      operationId: rejectLink
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/IntId" }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Link" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/links/{id}:
+    delete:
+      tags: [reimbursements]
+      summary: unlink a link, even a confirmed one
+      operationId: deleteLink
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/IntId" }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Link" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/counterparties:
+    get:
+      tags: [reimbursements]
+      summary: the people who pay you back, with their profile cards
+      operationId: listCounterparties
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Counterparty" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [reimbursements]
+      summary: add a counterparty with optional aliases
+      operationId: createCounterparty
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string }
+                aliases: { type: array, items: { type: string } }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Counterparty" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/counterparties/{id}:
+    patch:
+      tags: [reimbursements]
+      summary: rename, set the policy or auto-net, add an alias, or merge into another
+      operationId: patchCounterparty
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string }
+                policy: { type: string, enum: [ask, always_reimbursement, never] }
+                auto_net: { type: boolean }
+                add_alias: { type: string }
+                merge_into: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Counterparty" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/transfers/asks:
+    get:
+      tags: [transfers]
+      summary: lone transfer-looking transactions waiting for an answer
+      operationId: transferAsks
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [transaction, default, options]
+                      properties:
+                        transaction: { $ref: "#/components/schemas/Transaction" }
+                        default: { type: string }
+                        options: { type: array, items: { type: string } }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/transfers/asks/{txn}:
+    post:
+      tags: [transfers]
+      summary: answer a one-sided transfer as neutral, savings or spending
+      operationId: answerTransferAsk
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Txn" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [choice]
+              properties:
+                choice: { type: string, enum: [neutral, savings, spending] }
+      responses:
+        "200":
+          description: ok; event_id can be passed to /events/{id}/undo (0 when nothing changed)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [event_id]
+                properties:
+                  event_id: { type: integer }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/transactions/{txn}/unpair-transfer:
+    post:
+      tags: [transfers]
+      summary: dissolve an automatic pair; it is never made again
+      operationId: unpairTransfer
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/Txn" }]
+      requestBody: { $ref: "#/components/requestBodies/Empty" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        default: { $ref: "#/components/responses/Error" }
+
   /api/v1/imports:
     post:
       tags: [imports]
@@ -1694,6 +2051,112 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    Receivable:
+      type: object
+      additionalProperties: false
+      required: [id, counterparty_id, expense_id, part_no, amount, amount_max, expected_by, netted_now, note, source, opened_on, received, status, overdue, age_days, unrecovered]
+      properties:
+        id: { type: string }
+        counterparty_id: { type: string, nullable: true }
+        expense_id: { type: string }
+        part_no: { type: integer, nullable: true }
+        amount: { type: integer, format: int64 }
+        amount_max: { type: integer, format: int64, nullable: true }
+        expected_by: { type: string, nullable: true }
+        netted_now: { type: boolean }
+        note: { type: string }
+        source: { type: string }
+        opened_on: { type: string }
+        received: { type: integer, format: int64 }
+        status: { type: string, enum: [expected, partially_received, received, written_off] }
+        overdue: { type: boolean }
+        age_days: { type: integer }
+        unrecovered: { type: integer, format: int64 }
+    HeldPayment:
+      type: object
+      additionalProperties: false
+      required: [txn_id, state, since, grace_until, hold_until, declared, hint_merchant, hint_amount, amount, description, suggestions]
+      properties:
+        txn_id: { type: string }
+        state: { type: string, enum: [awaiting_expense, unlinked_reimbursement, needs_decision] }
+        since: { type: string }
+        grace_until: { type: string }
+        hold_until: { type: string }
+        declared: { type: boolean }
+        hint_merchant: { type: string }
+        hint_amount: { type: integer, format: int64, nullable: true }
+        amount: { type: integer, format: int64 }
+        description: { type: string }
+        suggestions: { type: integer }
+    Link:
+      type: object
+      additionalProperties: false
+      required: [id, payment_id, expense_id, part_no, receivable_id, amount, state, created_by]
+      properties:
+        id: { type: integer }
+        payment_id: { type: string }
+        expense_id: { type: string }
+        part_no: { type: integer, nullable: true }
+        receivable_id: { type: string, nullable: true }
+        amount: { type: integer, format: int64 }
+        state: { type: string, enum: [tentative, confirmed, rejected, removed] }
+        created_by: { type: string, enum: [user, auto_receivable, auto_pattern] }
+    MatchDecision:
+      type: object
+      additionalProperties: false
+      required: [payment_id, decision, source, reason, options, pattern_id, payer]
+      properties:
+        payment_id: { type: string }
+        decision: { type: string, enum: [auto_tentative, suggest, ambiguous, abstain, skip] }
+        source: { type: string }
+        reason: { type: string }
+        pattern_id: { type: string, nullable: true }
+        payer:
+          type: object
+          nullable: true
+          additionalProperties: false
+          required: [id, name, policy]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            policy: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [expense_id, receivable_id, amount, confidence, why, weak, over, group]
+            properties:
+              expense_id: { type: string }
+              receivable_id: { type: string, nullable: true }
+              amount: { type: integer, format: int64 }
+              confidence: { type: number }
+              why: { type: array, items: { type: string } }
+              weak: { type: boolean }
+              over: { type: boolean }
+              group: { type: integer }
+    Counterparty:
+      type: object
+      additionalProperties: false
+      required: [id, name, policy, auto_net, aliases, profile]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        policy: { type: string, enum: [ask, always_reimbursement, never] }
+        auto_net: { type: boolean }
+        aliases: { type: array, items: { type: string } }
+        profile:
+          type: object
+          nullable: true
+          additionalProperties: false
+          required: [paybacks, others, median_lag_days, median_share, reliability, mixed]
+          properties:
+            paybacks: { type: integer }
+            others: { type: integer }
+            median_lag_days: { type: integer }
+            median_share: { type: number }
+            reliability: { type: number }
+            mixed: { type: boolean }
     ReviewBody:
       type: object
       additionalProperties: false

@@ -73,8 +73,8 @@ func (s *Service) apply(ctx context.Context, tx *sql.Tx, w *world, d *Decision) 
 		return err
 	case KindSuggest, KindAmbiguous:
 		shown := d.Options
-		if len(shown) > 3 {
-			shown = shown[:3]
+		if len(shown) > 6 {
+			shown = shown[:6]
 		}
 		for rank, o := range shown {
 			if o.Features.Weak && d.Kind == KindSuggest {
@@ -86,8 +86,8 @@ func (s *Service) apply(ctx context.Context, tx *sql.Tx, w *world, d *Decision) 
 				rid = o.ReceivableID
 			}
 			eid = o.ExpenseID
-			if _, err := tx.ExecContext(ctx, `INSERT INTO link_suggestions (payment_txn_id, expense_txn_id, receivable_id, amount, confidence, reasons, rank) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-				d.PaymentID, eid, rid, o.Amount, o.P, string(why), rank+1); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO link_suggestions (payment_txn_id, expense_txn_id, receivable_id, amount, confidence, reasons, rank, grp) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+				d.PaymentID, eid, rid, o.Amount, o.P, string(why), rank+1, o.Group); err != nil {
 				return err
 			}
 		}
@@ -129,7 +129,8 @@ func (s *Service) logOnce(ctx context.Context, tx *sql.Tx, d *Decision, cp, outc
 func (s *Service) AcceptSuggestion(ctx context.Context, tx *sql.Tx, actor events.Actor, paymentID string, rank int) (links.Link, error) {
 	var exp, rec sql.NullString
 	var amount int64
-	err := tx.QueryRowContext(ctx, `SELECT expense_txn_id::text, receivable_id::text, amount FROM link_suggestions WHERE payment_txn_id=$1 AND rank=$2`, paymentID, rank).Scan(&exp, &rec, &amount)
+	var grp int
+	err := tx.QueryRowContext(ctx, `SELECT expense_txn_id::text, receivable_id::text, amount, grp FROM link_suggestions WHERE payment_txn_id=$1 AND rank=$2`, paymentID, rank).Scan(&exp, &rec, &amount, &grp)
 	if err == sql.ErrNoRows {
 		return links.Link{}, ErrNotFound
 	}
@@ -140,8 +141,29 @@ func (s *Service) AcceptSuggestion(ctx context.Context, tx *sql.Tx, actor events
 	if rec.Valid {
 		rid = &rec.String
 	}
-	l, err := s.Links.Create(ctx, tx, actor, links.Params{PaymentID: paymentID, ExpenseID: exp.String, ReceivableID: rid, Amount: amount, State: links.Tentative, CreatedBy: links.ByUser})
-	if err != nil {
+	var l links.Link
+	if grp > 0 { // a payment that covers several expenses: accept them together
+		rs, err := tx.QueryContext(ctx, `SELECT expense_txn_id::text, amount FROM link_suggestions WHERE payment_txn_id=$1 AND grp=$2 ORDER BY rank`, paymentID, grp)
+		if err != nil {
+			return l, err
+		}
+		type part struct {
+			e string
+			a int64
+		}
+		var parts []part
+		for rs.Next() {
+			var x part
+			rs.Scan(&x.e, &x.a)
+			parts = append(parts, x)
+		}
+		rs.Close()
+		for _, x := range parts {
+			if l, err = s.Links.Create(ctx, tx, actor, links.Params{PaymentID: paymentID, ExpenseID: x.e, Amount: x.a, State: links.Tentative, CreatedBy: links.ByUser}); err != nil {
+				return l, err
+			}
+		}
+	} else if l, err = s.Links.Create(ctx, tx, actor, links.Params{PaymentID: paymentID, ExpenseID: exp.String, ReceivableID: rid, Amount: amount, State: links.Tentative, CreatedBy: links.ByUser}); err != nil {
 		return l, err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM link_suggestions WHERE payment_txn_id=$1`, paymentID); err != nil {

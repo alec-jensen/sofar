@@ -162,3 +162,9 @@ func (e *env) sweepAt(now time.Time) {
 		}
 	})
 }
+
+func (e *env) acctOf(name string) string { return testkit.Account(e.t, e.db, name) }
+
+func (e *env) paymentIn(acct, posted string, cents int64, desc string) string {
+	return testkit.RawTxn(e.t, e.db, acct, testkit.Raw{PostedOn: posted, TransactedOn: posted, Amount: cents, Description: desc})
+}

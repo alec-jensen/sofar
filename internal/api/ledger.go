@@ -17,12 +17,17 @@ import (
 	"github.com/alec-jensen/sofar/internal/categories"
 	"github.com/alec-jensen/sofar/internal/categorize"
 	"github.com/alec-jensen/sofar/internal/civil"
+	"github.com/alec-jensen/sofar/internal/counterparties"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/httpx"
 	"github.com/alec-jensen/sofar/internal/ledger"
+	"github.com/alec-jensen/sofar/internal/links"
 	"github.com/alec-jensen/sofar/internal/manual"
 	"github.com/alec-jensen/sofar/internal/money"
+	"github.com/alec-jensen/sofar/internal/receivables"
 	"github.com/alec-jensen/sofar/internal/recurring"
+	"github.com/alec-jensen/sofar/internal/reimburse"
+	"github.com/alec-jensen/sofar/internal/transfers"
 )
 
 var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -51,8 +56,10 @@ func (s *server) withTx(w http.ResponseWriter, r *http.Request, fn func(ctx cont
 func (s *server) fail(w http.ResponseWriter, err error) {
 	var pg *pgconn.PgError
 	switch {
-	case errors.Is(err, ledger.ErrNotFound), errors.Is(err, accounts.ErrNotFound), errors.Is(err, categories.ErrNotFound), errors.Is(err, manual.ErrNotFound), errors.Is(err, events.ErrNotFound), errors.Is(err, recurring.ErrNotFound), errors.Is(err, budgetcfg.ErrNotFound), errors.Is(err, categorize.ErrNotFound):
+	case errors.Is(err, ledger.ErrNotFound), errors.Is(err, accounts.ErrNotFound), errors.Is(err, categories.ErrNotFound), errors.Is(err, manual.ErrNotFound), errors.Is(err, events.ErrNotFound), errors.Is(err, recurring.ErrNotFound), errors.Is(err, budgetcfg.ErrNotFound), errors.Is(err, categorize.ErrNotFound), errors.Is(err, links.ErrNotFound), errors.Is(err, receivables.ErrNotFound), errors.Is(err, counterparties.ErrNotFound), errors.Is(err, reimburse.ErrNotFound), errors.Is(err, transfers.ErrNotFound):
 		httpx.Fail(w, http.StatusNotFound, "not_found", "Not found.")
+	case errors.Is(err, links.ErrExceeds):
+		httpx.Fail(w, http.StatusUnprocessableEntity, "exceeds_remaining", "That is more than what is left to pay back. Confirm to override.")
 	case errors.Is(err, ledger.ErrSplitSum):
 		httpx.Fail(w, http.StatusUnprocessableEntity, "split_sum", "Split parts must add up to the transaction total.")
 	case errors.Is(err, categories.ErrProtected):
@@ -63,7 +70,7 @@ func (s *server) fail(w http.ResponseWriter, err error) {
 		httpx.Fail(w, http.StatusConflict, "event_state", "That change is already in the state you asked for.")
 	case errors.Is(err, manual.ErrNotManual):
 		httpx.Fail(w, http.StatusUnprocessableEntity, "not_manual", "Only transactions you entered yourself can be edited.")
-	case errors.Is(err, ledger.ErrInvalid), errors.Is(err, categories.ErrInvalid), errors.Is(err, accounts.ErrInvalid), errors.Is(err, manual.ErrInvalid), errors.Is(err, recurring.ErrInvalid), errors.Is(err, budgetcfg.ErrInvalid), errors.Is(err, categorize.ErrInvalid), errors.Is(err, errBadRequest):
+	case errors.Is(err, ledger.ErrInvalid), errors.Is(err, categories.ErrInvalid), errors.Is(err, accounts.ErrInvalid), errors.Is(err, manual.ErrInvalid), errors.Is(err, recurring.ErrInvalid), errors.Is(err, budgetcfg.ErrInvalid), errors.Is(err, categorize.ErrInvalid), errors.Is(err, links.ErrInvalid), errors.Is(err, receivables.ErrInvalid), errors.Is(err, counterparties.ErrInvalid), errors.Is(err, reimburse.ErrInvalid), errors.Is(err, transfers.ErrInvalid), errors.Is(err, errBadRequest):
 		httpx.Fail(w, http.StatusBadRequest, "invalid_input", cleanMessage(err))
 	case errors.As(err, &pg) && pg.Code == "23503":
 		httpx.Fail(w, http.StatusBadRequest, "unknown_reference", "That category or account does not exist.")
@@ -298,8 +305,10 @@ func (s *server) createTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 	var id string
 	if !s.withTx(w, r, func(ctx context.Context, tx *sql.Tx) (err error) {
-		id, err = s.Manual.AddTxn(ctx, tx, events.ActorUser, in.AccountID, date, money.Cents(in.Amount), in.Description, in.Payee)
-		return
+		if id, err = s.Manual.AddTxn(ctx, tx, events.ActorUser, in.AccountID, date, money.Cents(in.Amount), in.Description, in.Payee); err != nil {
+			return err
+		}
+		return s.Matching.Enqueue(ctx, tx)
 	}) {
 		return
 	}

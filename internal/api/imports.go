@@ -163,6 +163,14 @@ func (s *server) applyImport(w http.ResponseWriter, r *http.Request) {
 		s.importFail(w, err)
 		return
 	}
+	// new rows may pair, match or release held payments: one keyed job, in its own transaction
+	if tx, err := s.DB.BeginTx(r.Context(), nil); err == nil {
+		if s.Matching.Enqueue(r.Context(), tx) == nil {
+			tx.Commit()
+		} else {
+			tx.Rollback()
+		}
+	}
 	httpx.Respond(w, map[string]any{"event_id": e.ID, "summary": sum})
 }
 

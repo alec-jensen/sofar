@@ -8,11 +8,14 @@ import (
 
 	"github.com/alec-jensen/sofar/internal/budgetcfg"
 	"github.com/alec-jensen/sofar/internal/categorize"
+	"github.com/alec-jensen/sofar/internal/counterparties"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/httpx"
 	"github.com/alec-jensen/sofar/internal/importer"
 	"github.com/alec-jensen/sofar/internal/ledger"
+	"github.com/alec-jensen/sofar/internal/links"
 	"github.com/alec-jensen/sofar/internal/manual"
+	"github.com/alec-jensen/sofar/internal/receivables"
 	"github.com/alec-jensen/sofar/internal/recompute"
 	"github.com/alec-jensen/sofar/internal/recurring"
 )
@@ -138,6 +141,39 @@ func (s *server) reverse(w http.ResponseWriter, r *http.Request, redo bool) {
 				out, err = s.Ledger.Redo(ctx, tx, events.ActorUser, id, "")
 			} else {
 				out, err = s.Ledger.Undo(ctx, tx, events.ActorUser, id, "")
+			}
+			return
+		}) {
+			return
+		}
+	case links.KindCreate, links.KindState:
+		if !s.withTx(w, r, func(ctx context.Context, tx *sql.Tx) (err error) {
+			if redo {
+				out, err = s.Links.Redo(ctx, tx, events.ActorUser, id)
+			} else {
+				out, err = s.Links.Undo(ctx, tx, events.ActorUser, id)
+			}
+			return
+		}) {
+			return
+		}
+	case receivables.KindCreate, receivables.KindUpdate, receivables.KindWriteOff:
+		if !s.withTx(w, r, func(ctx context.Context, tx *sql.Tx) (err error) {
+			if redo {
+				out, err = s.Receivables.Redo(ctx, tx, events.ActorUser, id)
+			} else {
+				out, err = s.Receivables.Undo(ctx, tx, events.ActorUser, id)
+			}
+			return
+		}) {
+			return
+		}
+	case counterparties.KindCreate, counterparties.KindAlias, counterparties.KindMerge, counterparties.KindSplit, counterparties.KindUpdate:
+		if !s.withTx(w, r, func(ctx context.Context, tx *sql.Tx) (err error) {
+			if redo {
+				out, err = s.Counterparties.Redo(ctx, tx, events.ActorUser, id)
+			} else {
+				out, err = s.Counterparties.Undo(ctx, tx, events.ActorUser, id)
 			}
 			return
 		}) {

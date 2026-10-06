@@ -310,3 +310,52 @@ func TestS12a_T11_HiddenPendingHintRaisesAbstainBiasNeverLinks(t *testing.T) {
 func TestS12a_T12_EveryScheduledPullSendsPending(t *testing.T) {
 	t.Skip("M2: verified in the sync client tests (internal/simplefin) when the client lands")
 }
+
+func TestS12a_DeclarationBindsPlaceholder(t *testing.T) {
+	e := setup(t)
+	e.dad()
+	e.expense("2026-10-12", "2026-10-12", 6000, "HOME DEPOT 0121", "home_household")
+	pay := e.payment("2026-10-15", 1100, "VENMO PAYMENT FROM DAD", "")
+	e.process()
+	approx := int64(2200)
+	e.tx(func(tx *sql.Tx) {
+		if err := e.svc.Declare(context.Background(), tx, pay, "McDonalds", &approx); err != nil {
+			t.Fatal(err)
+		}
+	})
+	h := e.held()[pay]
+	if !h.Declared || h.HintMerchant != "mcdonalds" || h.HintAmount == nil || *h.HintAmount != 2200 {
+		t.Fatalf("the placeholder keeps its hints: %+v", h)
+	}
+	// a declared placeholder does not age into a question while it waits
+	e.sweepAt(time.Date(2026, 11, 30, 12, 0, 0, 0, time.UTC))
+	if e.held()[pay].State != reimburse.AwaitingExpense {
+		t.Fatalf("it waits for its expense: %+v", e.held()[pay])
+	}
+	e.sweepAt(time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC))
+	e1 := e.expense("2026-10-17", "2026-10-14", 2240, "MCDONALDS F1234", "dining_out")
+	d := e.process()[pay]
+	if d.Kind != reimburse.KindAuto || d.Source != "declaration" || d.Chosen.ExpenseID != e1 {
+		t.Fatalf("it binds to the expense when it appears: %+v", d)
+	}
+	ls := e.activeLinks()
+	if len(ls) != 1 || ls[0].State != links.Tentative || ls[0].CreatedBy != links.ByUser || ls[0].ExpenseID != e1 {
+		t.Fatalf("tentative, and still waiting for review: %+v", ls)
+	}
+	if _, still := e.held()[pay]; still {
+		t.Fatal("no longer held")
+	}
+}
+
+func TestS12a_DeclarationNeverBindsToAmbiguousHint(t *testing.T) {
+	e := setup(t)
+	e.dad()
+	pay := e.payment("2026-10-15", 1100, "VENMO PAYMENT FROM DAD", "")
+	e.process()
+	e.tx(func(tx *sql.Tx) { e.svc.Declare(context.Background(), tx, pay, "mcdonalds", nil) })
+	e.expense("2026-10-17", "2026-10-14", 2240, "MCDONALDS F1234", "dining_out")
+	e.expense("2026-10-17", "2026-10-14", 2250, "MCDONALDS F9999", "dining_out")
+	if d := e.process()[pay]; d.Source == "declaration" || len(e.activeLinks()) != 0 {
+		t.Fatalf("two matches means asking, not binding: %+v", d)
+	}
+}

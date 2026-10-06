@@ -42,3 +42,20 @@ Every tunable default lives here and is exposed in settings. Add a row whenever 
 | growth level thresholds | 0, 100, 300, 700, 1500, 3000, 6000, 12000, 24000, 48000 | S19.25 | |
 | clean-books hidden-share limit | unusual share withholds the award | S19.25 | threshold tunable |
 | gamification notifications | off | S19.25 | optional weekly recap |
+| transfer pairing window | 3 days (5 for an account pair paired 3 or more times) | S12 | transaction dates |
+| transfer ask delay | 3 days | S12 | a lone transfer-looking row waits this long for a partner |
+| match suggestion threshold | 0.6 calibrated probability | S12a | raised by the hidden-pending hint, never lowered |
+| match ambiguity margin | 0.15 | S12a, S12b | best must beat the runner-up by this much or it asks |
+| match auto-tentative confidence | 0.8 | S12b | only for a proven pattern |
+| held payment grace | 5 days from the payment | S12a | then asks "what was it for"; later learned per account |
+| held payment hold | 30 days after the grace | S12 | held outside income, then needs a decision |
+| match lookback | 30 days (payer's own lag plus 2 once learned) | S12b | |
+| posting delay | 3 days (the account's median once measured) | S12a | not penalized for an expense dated after the payment |
+| materiality gate | $100 | S12b | above this a link is never auto-tentative |
+| pattern graduation | 3 consecutive confirmations, no strike | S12b | one strike or rejection returns it to suggest-only |
+| pattern share tolerance | 4 points, widened to twice the payer's own spread, at most 10 | S12b | tips and rounding |
+| pattern precision floor | 80% over the last 10, at least 5 | S12b | below this the pattern is demoted and the owner told |
+| pattern decay | 120 days without a confirmation | S12b | demoted to suggest-only |
+| receivable aging alerts | 14, 30 and 60 days (the payer's own lag when known) | S12a | |
+| receivable overdue | past the expected-by date, else 30 days | S12a | derived, never stored |
+| matching job | after every import or manual entry, and nightly at 03:45 home time | A7 | keyed per minute and per day |

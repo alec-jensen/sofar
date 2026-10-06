@@ -25,6 +25,7 @@ import (
 	"github.com/alec-jensen/sofar/internal/crypt"
 	"github.com/alec-jensen/sofar/internal/jobs"
 	"github.com/alec-jensen/sofar/internal/logging"
+	"github.com/alec-jensen/sofar/internal/matching"
 	"github.com/alec-jensen/sofar/internal/metrics"
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
@@ -188,8 +189,11 @@ func serve(args []string) error {
 			return err
 		}))
 		q.Register(categorize.NightlyKind, categorize.NightlyHandler(deps.Categorize, log))
+		q.Register(matching.RunKind, matching.Handler(deps.Matching, log))
+		q.Register(matching.NightlyKind, matching.Handler(deps.Matching, log))
 		sched := jobs.NewScheduler(db, log, cfg.HomeTZ)
 		sched.Add(categorize.NightlyPeriodic())
+		sched.Add(matching.NightlyPeriodic())
 		sched.Add(rollover.Periodic())
 		go q.Run(ctx, 5*time.Second)
 		go sched.Run(ctx, time.Minute)

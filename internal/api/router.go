@@ -15,15 +15,21 @@ import (
 	"github.com/alec-jensen/sofar/internal/categories"
 	"github.com/alec-jensen/sofar/internal/categorize"
 	"github.com/alec-jensen/sofar/internal/config"
+	"github.com/alec-jensen/sofar/internal/counterparties"
 	"github.com/alec-jensen/sofar/internal/events"
 	"github.com/alec-jensen/sofar/internal/httpx"
 	"github.com/alec-jensen/sofar/internal/importer"
 	"github.com/alec-jensen/sofar/internal/ledger"
+	"github.com/alec-jensen/sofar/internal/links"
 	"github.com/alec-jensen/sofar/internal/manual"
+	"github.com/alec-jensen/sofar/internal/matching"
 	"github.com/alec-jensen/sofar/internal/netguard"
 	"github.com/alec-jensen/sofar/internal/notify"
+	"github.com/alec-jensen/sofar/internal/receivables"
 	"github.com/alec-jensen/sofar/internal/recompute"
 	"github.com/alec-jensen/sofar/internal/recurring"
+	"github.com/alec-jensen/sofar/internal/reimburse"
+	"github.com/alec-jensen/sofar/internal/transfers"
 )
 
 // Deps is everything the HTTP layer needs.
@@ -35,17 +41,23 @@ type Deps struct {
 	Push     *notify.Sender
 
 	// Domain services (nil in tests that do not need them).
-	Accounts   *accounts.Service
-	Ledger     *ledger.Service
-	Categories *categories.Service
-	Importer   *importer.Service
-	Manual     *manual.Service
-	Recompute  *recompute.Service
-	Recurring  *recurring.Service
-	Budget     *budgetcfg.Service
-	Categorize *categorize.Service
-	Events     *events.Registry
-	Log        zerolog.Logger
+	Accounts       *accounts.Service
+	Ledger         *ledger.Service
+	Categories     *categories.Service
+	Importer       *importer.Service
+	Manual         *manual.Service
+	Recompute      *recompute.Service
+	Recurring      *recurring.Service
+	Budget         *budgetcfg.Service
+	Categorize     *categorize.Service
+	Links          *links.Service
+	Counterparties *counterparties.Service
+	Receivables    *receivables.Service
+	Reimburse      *reimburse.Service
+	Transfers      *transfers.Service
+	Matching       *matching.Service
+	Events         *events.Registry
+	Log            zerolog.Logger
 	// Metrics, when set, is served at /metrics to loopback callers and signed-in users.
 	Metrics http.Handler
 	// Ready reports whether the database is reachable and migrations are current.
@@ -150,6 +162,23 @@ func (s *server) routes() {
 
 	m.Handle("POST /api/v1/preview", s.protect(s.preview))
 	m.Handle("GET /api/v1/rollover/checklist", s.protect(s.checklist))
+
+	m.Handle("GET /api/v1/owed", s.protect(s.owed))
+	m.Handle("POST /api/v1/receivables", s.protect(s.idempotent(s.createReceivable)))
+	m.Handle("POST /api/v1/receivables/{id}/received", s.protect(s.idempotent(s.receivableReceived)))
+	m.Handle("POST /api/v1/receivables/{id}/write-off", s.protect(s.idempotent(s.receivableWriteOff)))
+	m.Handle("GET /api/v1/payments/{txn}/candidates", s.protect(s.paymentCandidates))
+	m.Handle("POST /api/v1/links", s.protect(s.idempotent(s.createLink)))
+	m.Handle("POST /api/v1/links/{id}/confirm", s.protect(s.idempotent(s.confirmLink)))
+	m.Handle("POST /api/v1/links/{id}/reject", s.protect(s.idempotent(s.rejectLink)))
+	m.Handle("DELETE /api/v1/links/{id}", s.protect(s.idempotent(s.deleteLink)))
+	m.Handle("GET /api/v1/counterparties", s.protect(s.listCounterparties))
+	m.Handle("POST /api/v1/counterparties", s.protect(s.idempotent(s.createCounterparty)))
+	m.Handle("PATCH /api/v1/counterparties/{id}", s.protect(s.idempotent(s.patchCounterparty)))
+	m.Handle("GET /api/v1/debug/match/{txn}", s.protect(s.debugMatch))
+	m.Handle("GET /api/v1/transfers/asks", s.protect(s.transferAsks))
+	m.Handle("POST /api/v1/transfers/asks/{txn}", s.protect(s.idempotent(s.answerTransferAsk)))
+	m.Handle("POST /api/v1/transactions/{txn}/unpair-transfer", s.protect(s.idempotent(s.unpairTransfer)))
 
 	m.Handle("GET /api/v1/review/queue", s.protect(s.reviewQueue))
 	m.Handle("POST /api/v1/review/batch", s.protect(s.idempotent(s.reviewBatch)))

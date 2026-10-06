@@ -77,6 +77,7 @@ type Service struct {
 // New builds a Service and registers its event payloads.
 func New(db *sql.DB, reg *events.Registry, l *links.Service, c *counterparties.Service, r *receivables.Service) *Service {
 	reg.Register(KindPatternDemoted, 1, PatternDemoted{})
+	reg.Register(KindPatternConflict, 1, PatternDemoted{})
 	return &Service{DB: db, Reg: reg, Links: l, Cps: c, Recv: r, Now: time.Now, Home: time.UTC, Cfg: DefaultConfig()}
 }
 
@@ -102,6 +103,9 @@ type Option struct {
 	P            float64
 	Why          []string
 	Features     Features
+	// Group above 0 ties options that together cover one payment (a payment for
+	// several expenses); accepting one accepts the group.
+	Group int
 }
 
 // Decision is the matcher's verdict on one payment, with its reasoning.
@@ -122,16 +126,32 @@ type world struct {
 	byID     map[string]row
 	recv     []receivables.Receivable
 	postDays map[string]int
+	paidBy   map[string]map[string]bool // expense id -> payer keys that already paid part of it
 }
 
 func (s *Service) loadWorld(ctx context.Context, q events.DBTX, only string) (*world, error) {
-	w := &world{byID: map[string]row{}, postDays: map[string]int{}}
+	w := &world{byID: map[string]row{}, postDays: map[string]int{}, paidBy: map[string]map[string]bool{}}
 	lo := s.today().AddDays(-(s.Cfg.LookbackDays + 120))
 	all, err := queryRows(ctx, q, ` AND r.posted_on >= $1`, lo.String())
 	if err != nil {
 		return nil, err
 	}
+	own := map[string]int64{} // a replay forgets the payment's own links
+	if only != "" {
+		rs, err := q.QueryContext(ctx, `SELECT expense_txn_id::text, sum(amount) FROM links WHERE payment_txn_id::text=$1 AND state IN ('tentative','confirmed') GROUP BY 1`, only)
+		if err != nil {
+			return nil, err
+		}
+		for rs.Next() {
+			var e string
+			var a int64
+			rs.Scan(&e, &a)
+			own[e] = a
+		}
+		rs.Close()
+	}
 	for _, x := range all {
+		x.Linked -= own[x.ID]
 		w.byID[x.ID] = x
 		if eligiblePayment(x) && (only == "" && !x.Pending || only == x.ID) {
 			w.payments = append(w.payments, x)
@@ -147,6 +167,17 @@ func (s *Service) loadWorld(ctx context.Context, q events.DBTX, only string) (*w
 	}
 	if w.recv, err = s.Recv.List(ctx, q, true); err != nil {
 		return nil, err
+	}
+	if lr, err := q.QueryContext(ctx, `SELECT l.expense_txn_id, r.description, r.payee FROM links l JOIN raw_transactions r ON r.id = l.payment_txn_id WHERE l.state IN ('tentative','confirmed') AND l.payment_txn_id::text <> $1`, only); err == nil {
+		for lr.Next() {
+			var e, d, pe string
+			lr.Scan(&e, &d, &pe)
+			if w.paidBy[e] == nil {
+				w.paidBy[e] = map[string]bool{}
+			}
+			w.paidBy[e][counterparties.ParseName(d+" "+pe).Key()] = true
+		}
+		lr.Close()
 	}
 	rs, err := q.QueryContext(ctx, `SELECT account_id, coalesce(percentile_disc(0.5) WITHIN GROUP (ORDER BY posted_on - transacted_on), 0)
 		FROM raw_transactions WHERE transacted_on IS NOT NULL AND amount < 0 GROUP BY account_id`)
@@ -194,12 +225,13 @@ func (s *Service) plan(ctx context.Context, q events.DBTX, only string) ([]Decis
 		}
 		out = append(out, d)
 	}
+	s.markDuplicates(w, out)
 	// global assignment over payments that still have strong options (S12b step 3)
 	var rows []int
 	var cols []string
 	colIdx := map[string]int{}
 	for i, d := range out {
-		if d.Kind != KindSuggest {
+		if d.Kind != KindSuggest || len(d.Options) > 0 && d.Options[0].Group > 0 {
 			continue
 		}
 		rows = append(rows, i)
@@ -304,8 +336,9 @@ func (s *Service) maybeAuto(ctx context.Context, q events.DBTX, w *world, d *Dec
 	}
 	ratio := float64(d.Chosen.Amount) / float64(-exp.Amount)
 	lag := pay.Date.DaysSince(exp.Date)
+	tol := s.ratioTolerance(ctx, q, d.Payer.ID)
 	for _, p := range ps {
-		if p.State != Active || p.CategoryID != exp.Category || math.Abs(p.ShareRatio-ratio) > s.Cfg.PatternRatioTolerance || lag > p.LagMax+1 {
+		if p.State != Active || p.CategoryID != exp.Category || math.Abs(p.ShareRatio-ratio) > tol || lag > p.LagMax+1 {
 			continue
 		}
 		d.Kind, d.Source, d.PatternID = KindAuto, "pattern", p.ID
@@ -336,11 +369,16 @@ func (s *Service) decideOne(ctx context.Context, q events.DBTX, w *world, p row)
 		// not a person paying: only a merchant refund can fit, by merchant name (suggestion only)
 	}
 	remaining := p.Amount - p.Linked
+	learnedLookback := 0
 	pay := Pay{ID: p.ID, Account: p.Account, Date: p.Date, Amount: remaining, Text: p.memoText()}
 	if d.Payer != nil {
 		pay.CounterpartyID, pay.PayerKnown = d.Payer.ID, true
 		if pr, err := s.Profile(ctx, q, d.Payer.ID); err == nil {
-			pay.ShareRatio = pr.MedianShare
+			pay.ShareRatio, pay.ShareSpread, pay.Categories, pay.Paybacks = pr.MedianShare, pr.Spread, pr.Categories, pr.Paybacks
+			learnedLookback = 0
+			if pr.Paybacks >= 3 {
+				learnedLookback = pr.MaxLag + 2
+			}
 			pay.PayerKnown = pr.Paybacks > 0 || d.Payer.Policy == counterparties.PolicyAlwaysReimbursment
 		}
 	}
@@ -364,7 +402,7 @@ func (s *Service) decideOne(ctx context.Context, q events.DBTX, w *world, p row)
 	}
 
 	// stage 2: score the expenses in the window
-	ctxF := FeatureCtx{PostingDelayDays: orDefault(w.postDays[p.Account], s.Cfg.PostingDelayDays), LookbackDays: s.Cfg.LookbackDays}
+	ctxF := FeatureCtx{PostingDelayDays: orDefault(w.postDays[p.Account], s.Cfg.PostingDelayDays), LookbackDays: orDefault(learnedLookback, s.Cfg.LookbackDays)}
 	var cands []row
 	for _, e := range w.expenses {
 		if e.Currency != p.Currency || e.ID == p.ID {
@@ -376,8 +414,9 @@ func (s *Service) decideOne(ctx context.Context, q events.DBTX, w *world, p row)
 		cands = append(cands, e)
 	}
 	ctxF.Candidates = len(cands)
+	payerKey := counterparties.ParseName(p.payerText()).Key()
 	for _, e := range cands {
-		c := Cand{ID: e.ID, Account: e.Account, Date: e.Date, Remaining: -e.Amount - e.Linked, Total: -e.Amount, Category: e.Category, Merchant: e.merchant(), Text: strings.ToLower(e.Description), Pending: e.Pending}
+		c := Cand{PaidBySamePayer: payerKey != "" && w.paidBy[e.ID][payerKey], ID: e.ID, Account: e.Account, Date: e.Date, Remaining: -e.Amount - e.Linked, Total: -e.Amount, Category: e.Category, Merchant: e.merchant(), Text: strings.ToLower(e.Description), Pending: e.Pending}
 		f := Extract(pay, c, ctxF)
 		prob, why := Score(f, remaining, c)
 		if !isP2P(p, d.Payer != nil) && !f.SameMerchant {
@@ -390,8 +429,18 @@ func (s *Service) decideOne(ctx context.Context, q events.DBTX, w *world, p row)
 	thr := s.threshold(p.Account)
 	var strong []Option
 	for _, o := range d.Options {
-		if !o.Features.Weak && !o.Features.Over && !o.Features.TooEarly && o.P >= thr {
+		if !o.Features.Weak && !o.Features.Over && !o.Features.TooEarly && o.Features.LagOK && o.P >= thr {
 			strong = append(strong, o)
+		}
+	}
+	if len(strong) == 0 {
+		if combo, ambiguous := s.combos(w, p, remaining, cands, d.Options, thr); len(combo) > 0 {
+			d.Kind, d.Source, d.Options = KindSuggest, "model", append(combo, d.Options...)
+			d.Reason = "one payment that fits two expenses together"
+			if ambiguous {
+				d.Kind, d.Reason = KindAmbiguous, "more than one pair of expenses fits this payment, so it asks"
+			}
+			return d
 		}
 	}
 	switch {
@@ -493,4 +542,67 @@ func (s *Service) Debug(ctx context.Context, q events.DBTX, paymentID string) (D
 		}
 	}
 	return Decision{}, ErrNotFound
+}
+
+// combos finds pairs of expenses that one payment could cover together (S12b edge
+// 6): the payment equals the pair's total, or half of it, within a tight
+// tolerance. Exactly one fitting pair is suggested; several ask.
+func (s *Service) combos(w *world, p row, remaining int64, cands []row, singles []Option, thr float64) (out []Option, ambiguous bool) {
+	if len(cands) < 2 || len(cands) > 24 {
+		return nil, false
+	}
+	type pair struct{ a, b row }
+	var fits []pair
+	for i := 0; i < len(cands); i++ {
+		for j := i + 1; j < len(cands); j++ {
+			a, b := cands[i], cands[j]
+			ra, rb := -a.Amount-a.Linked, -b.Amount-b.Linked
+			sum := float64(ra + rb)
+			for _, k := range []float64{1, 0.5} {
+				if math.Abs(float64(remaining)-k*sum) <= 0.02*k*sum+1 && float64(remaining) > 0 {
+					// each share must be at least a half of... keep both expenses within the lookback of each other
+					if a.Date.DaysSince(b.Date) < 14 && b.Date.DaysSince(a.Date) < 14 {
+						fits = append(fits, pair{a, b})
+					}
+					break
+				}
+			}
+		}
+	}
+	if len(fits) == 0 {
+		return nil, false
+	}
+	for gi, f := range fits {
+		if gi >= 3 {
+			break
+		}
+		ra, rb := -f.a.Amount-f.a.Linked, -f.b.Amount-f.b.Linked
+		share := float64(remaining) / float64(ra+rb)
+		for _, e := range []row{f.a, f.b} {
+			r := -e.Amount - e.Linked
+			out = append(out, Option{ExpenseID: e.ID, Amount: int64(math.Round(share * float64(r))), P: 0.7, Group: gi + 1,
+				Why: []string{fmt.Sprintf("%s together with another expense", pct(share))}})
+		}
+	}
+	return out, len(fits) > 1
+}
+
+// markDuplicates catches a platform double entry (the same payment shown by a
+// payment app and by the bank): equal amount, same payer, different accounts,
+// within two days. The later one is skipped and flagged for the user.
+func (s *Service) markDuplicates(w *world, ds []Decision) {
+	for j := range ds {
+		for i := 0; i < j; i++ {
+			a, b := w.byID[ds[i].PaymentID], w.byID[ds[j].PaymentID]
+			ka, kb := counterparties.ParseName(a.payerText()).Key(), counterparties.ParseName(b.payerText()).Key()
+			if ka == "" || ka != kb || a.Amount != b.Amount || a.Account == b.Account || ds[i].Kind == KindSkip || ds[j].Kind == KindSkip {
+				continue
+			}
+			if gap := a.Date.DaysSince(b.Date); gap >= -2 && gap <= 2 {
+				ds[j].Kind, ds[j].Chosen = KindSkip, nil
+				ds[j].Reason = "possible duplicate of another deposit with the same amount and payer (a payment app and the bank)"
+				break
+			}
+		}
+	}
 }

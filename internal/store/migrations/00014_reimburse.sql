@@ -22,6 +22,7 @@ CREATE TABLE link_suggestions (
   confidence double precision NOT NULL,
   reasons jsonb NOT NULL DEFAULT '[]',
   rank integer NOT NULL,
+  grp integer NOT NULL DEFAULT 0,          -- above 0: these rows together cover one payment (several expenses)
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (payment_txn_id, rank)
 );

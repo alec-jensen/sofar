@@ -30,6 +30,8 @@ type Config struct {
 	RotateRate    float64
 	// TipRate is the share of dining purchases whose posted amount differs from pending.
 	TipRate float64
+	// PaybackRate is the share of larger dining purchases a friend pays half of; 0 keeps the default of one in six.
+	PaybackRate float64
 }
 
 // DefaultConfig is a year of life.
@@ -308,7 +310,7 @@ func (g *gen) spend(d civil.Date) {
 	}
 	added := g.add(t)
 	// a friend pays part of a meal back a few days later
-	if m.dining && amount > 1800 && g.r.Intn(6) == 0 {
+	if m.dining && amount > 1800 && g.payback() {
 		back := (amount / 2 / 100) * 100
 		g.add(Txn{Raw: Raw{Posted: d.AddDays(2 + g.r.Intn(4)), Amount: money.Cents(back), Description: "VENMO PAYMENT FROM DAD", Payee: "DAD"},
 			Truth: Truth{Category: "reimbursement", Kind: KindReimbursement, Reimburses: added.Raw.ID}})
@@ -392,4 +394,12 @@ func (o *Oracle) Label(t Txn) string {
 		return o.cats[o.r.Intn(len(o.cats))]
 	}
 	return t.Truth.Category
+}
+
+// payback decides whether a friend pays this meal back.
+func (g *gen) payback() bool {
+	if g.cfg.PaybackRate > 0 {
+		return g.r.Float64() < g.cfg.PaybackRate
+	}
+	return g.r.Intn(6) == 0
 }

@@ -113,6 +113,15 @@ func (s *Service) learn(ctx context.Context, tx *sql.Tx, ex example) (*Pattern, 
 	if ex.Counterparty == "" || ex.Total <= 0 {
 		return nil, nil
 	}
+	if up, ok := s.userPatternFor(ctx, tx, ex.Counterparty, ex.Category); ok {
+		// the user's own habit wins; a learned one that disagrees is not built, and the owner is asked
+		if math.Abs(up.ShareRatio-ex.ratio()) > s.Cfg.PatternRatioTolerance {
+			_, err := events.Append(ctx, tx, s.Reg, events.New{Actor: events.ActorSystem, Kind: KindPatternConflict, SubjectType: "reimburse", SubjectID: up.ID, Payload: PatternDemoted{PatternID: up.ID, Reason: "recent paybacks differ from the habit you wrote: update it?"}})
+			return nil, err
+		}
+		return &up, nil
+	}
+	tol := s.ratioTolerance(ctx, tx, ex.Counterparty)
 	rs, err := tx.QueryContext(ctx, `SELECT `+patternCols+` FROM reimbursement_patterns WHERE counterparty_id::text=$1 AND category_id=$2 AND state <> 'disabled' ORDER BY id`, ex.Counterparty, ex.Category)
 	if err != nil {
 		return nil, err
@@ -124,7 +133,7 @@ func (s *Service) learn(ctx context.Context, tx *sql.Tx, ex example) (*Pattern, 
 			rs.Close()
 			return nil, err
 		}
-		if math.Abs(p.ShareRatio-ex.ratio()) <= s.Cfg.PatternRatioTolerance && match == nil {
+		if math.Abs(p.ShareRatio-ex.ratio()) <= tol && match == nil {
 			cp := p
 			match = &cp
 		}
@@ -247,14 +256,19 @@ type Profile struct {
 	Others      int // deposits the user said were not reimbursements
 	MedianLag   int
 	MedianShare float64
-	Reliability float64 // share of their receivables fully repaid
-	Mixed       bool    // both reimbursements and other money: never auto-link
+	Spread      float64        // mean absolute deviation of their share
+	MaxLag      int            // the longest ordinary lag (90th percentile)
+	Categories  map[string]int // confirmed paybacks per expense category
+	Reliability float64        // share of their receivables fully repaid
+	Mixed       bool           // both reimbursements and other money: never auto-link
 }
 
 // Profile builds a counterparty's card from the user's own labels.
 func (s *Service) Profile(ctx context.Context, q events.DBTX, cp string) (Profile, error) {
 	var pr Profile
-	rs, err := q.QueryContext(ctx, `SELECT lag_days, amount, expense_total FROM link_events WHERE counterparty_id::text=$1 AND outcome IN ('confirmed','manual') ORDER BY id`, cp)
+	pr.Categories = map[string]int{}
+	rs, err := q.QueryContext(ctx, `SELECT lag_days, amount, expense_total, category_id FROM link_events e WHERE counterparty_id::text=$1 AND outcome IN ('confirmed','manual')
+		AND NOT EXISTS (SELECT 1 FROM link_events u WHERE u.link_id = e.link_id AND u.outcome IN ('unlinked','rejected')) ORDER BY id`, cp)
 	if err != nil {
 		return pr, err
 	}
@@ -263,8 +277,10 @@ func (s *Service) Profile(ctx context.Context, q events.DBTX, cp string) (Profil
 	for rs.Next() {
 		var lag sql.NullInt64
 		var a, t sql.NullInt64
-		rs.Scan(&lag, &a, &t)
+		var cat string
+		rs.Scan(&lag, &a, &t, &cat)
 		pr.Paybacks++
+		pr.Categories[cat]++
 		lags = append(lags, int(lag.Int64))
 		if t.Int64 > 0 {
 			shares = append(shares, float64(a.Int64)/float64(t.Int64))
@@ -275,9 +291,14 @@ func (s *Service) Profile(ctx context.Context, q events.DBTX, cp string) (Profil
 	sort.Float64s(shares)
 	if len(lags) > 0 {
 		pr.MedianLag = lags[len(lags)/2]
+		pr.MaxLag = lags[min(len(lags)-1, len(lags)*9/10)]
 	}
 	if len(shares) > 0 {
 		pr.MedianShare = shares[len(shares)/2]
+		for _, sh := range shares {
+			pr.Spread += math.Abs(sh - pr.MedianShare)
+		}
+		pr.Spread /= float64(len(shares))
 	}
 	if err = q.QueryRowContext(ctx, `SELECT count(*) FROM payer_labels WHERE counterparty_id::text=$1 AND label='other'`, cp).Scan(&pr.Others); err != nil {
 		return pr, err
@@ -494,4 +515,18 @@ func (s *Service) ClassifyOther(ctx context.Context, tx *sql.Tx, txnID string) e
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE held_payments SET state='resolved', resolved_at=now() WHERE txn_id=$1`, txnID)
 	return err
+}
+
+// ratioTolerance is how far a share may sit from a payer's habit: the global
+// tolerance, widened to twice how much this payer's own share varies (tips and
+// rounding), never beyond ten points.
+func (s *Service) ratioTolerance(ctx context.Context, q events.DBTX, cp string) float64 {
+	tol := s.Cfg.PatternRatioTolerance
+	if cp == "" {
+		return tol
+	}
+	if pr, err := s.Profile(ctx, q, cp); err == nil && pr.Paybacks >= 3 {
+		tol = math.Max(tol, math.Min(0.10, 2*pr.Spread))
+	}
+	return tol
 }
