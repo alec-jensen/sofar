@@ -17,11 +17,12 @@ import (
 )
 
 type env struct {
-	t    *testing.T
-	db   *sql.DB
-	svc  *categorize.Service
-	led  *ledger.Service
-	acct string
+	t      *testing.T
+	db     *sql.DB
+	svc    *categorize.Service
+	led    *ledger.Service
+	acct   string
+	dayNow int
 }
 
 func setup(t *testing.T) *env {
@@ -258,4 +259,10 @@ func TestS18a_InstallSeedsIsIdempotentAndLeavesUserRules(t *testing.T) {
 	if !found {
 		t.Fatal("the user's rule is untouched")
 	}
+}
+
+func (e *env) installSeeds(ctx context.Context) error {
+	var err error
+	e.tx(func(tx *sql.Tx) { _, err = e.svc.InstallSeeds(ctx, tx) })
+	return err
 }

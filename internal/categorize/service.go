@@ -45,6 +45,8 @@ type Service struct {
 	Rules  *rules.Store
 	Reg    *events.Registry
 	Now    func() time.Time
+	// AuditShare is the share of high-confidence items whose suggestion is hidden (audit mode; 0 is off).
+	AuditShare float64
 }
 
 // New builds a Service and registers its event payloads.

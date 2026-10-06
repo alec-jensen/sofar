@@ -324,6 +324,9 @@ type QueueItem struct {
 	Suggestion Suggestion
 	GroupKey   string // merchant, for review by merchant
 	Rank       int
+	// Hidden is set by audit mode: the suggestion is withheld so the user's
+	// own answer can be compared with it later.
+	Hidden bool
 }
 
 // Queue returns the unreviewed transactions in triage order, with live
@@ -343,7 +346,7 @@ func (s *Service) Queue(ctx context.Context, limit int) ([]QueueItem, error) {
 			continue
 		}
 		sg := s.suggest(t, st)
-		out = append(out, QueueItem{Txn: t, Suggestion: sg, GroupKey: normalize.MerchantKey(t.Description), Rank: triageRank(sg)})
+		out = append(out, QueueItem{Txn: t, Suggestion: sg, GroupKey: normalize.MerchantKey(t.Description), Rank: triageRank(sg), Hidden: auditHidden(t.ID, s.AuditShare, sg.Confidence)})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
